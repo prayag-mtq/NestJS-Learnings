@@ -1,113 +1,163 @@
-### 🧱 What is a Module?
+# Middleware in NestJS
 
-A **module** is simply a TypeScript class annotated with the `@Module()` decorator. It provides **metadata** to Nest that describes how to organize the application structure.
+## What is Middleware?
+
+Middleware is a function that is invoked **before** the route handler. It has access to the request (`req`) and response (`res`) objects, and to the `next()` function that passes control to the next middleware.
+
+### Key Capabilities
+- Execute any code.
+- Modify request and response objects.
+- End the request-response cycle.
+- Call the next middleware in the stack.
+
+> ❗ If `next()` is not called and the response is not sent, the request will hang.
+
+---
+
+## Applying Middleware
+
+Unlike other components, middleware is **not declared in `@Module()`**. Instead, it is set up using the `configure()` method in a class implementing `NestModule`.
 
 ```ts
+import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
+import { LoggerMiddleware } from './common/middleware/logger.middleware';
+import { CatsModule } from './cats/cats.module';
+
 @Module({
-  imports: [],
-  controllers: [],
-  providers: [],
-  exports: [],
+  imports: [CatsModule],
 })
-export class SomeModule {}
-```
-
----
-
-### 🗂 Role of Modules
-
-Each NestJS application has a **root module**, but real-world apps usually contain **many modules**, each responsible for a specific feature or domain (e.g., `CatsModule`, `UsersModule`).
-
-Modules help:
-
-* Organize business logic
-* Encapsulate and reuse services
-* Enable clean dependency injection
-* Improve maintainability and testability
-
----
-
-### 🛠 @Module Decorator
-
-The `@Module()` decorator accepts the following configuration options:
-
-| Property      | Purpose                                                                |
-| ------------- | ---------------------------------------------------------------------- |
-| `providers`   | Services, factories, etc., that should be created by the DI system     |
-| `controllers` | Controllers that handle incoming requests and return responses         |
-| `imports`     | Other modules whose exported providers are required in this module     |
-| `exports`     | Providers that should be available in other modules importing this one |
-
----
-
-### ♻️ Shared Modules
-
-By default, modules in NestJS are **singletons** and shared across imports. If you want to share a provider like `CatsService` across multiple modules, export it from its module:
-
-```ts
-@Module({
-  controllers: [CatsController],
-  providers: [CatsService],
-  exports: [CatsService],
-})
-export class CatsModule {}
-```
-
-Now, any module importing `CatsModule` will **reuse the same instance** of `CatsService`.
-
----
-
-### 🌐 Global Modules
-
-If a module (e.g., `DatabaseModule`, `LoggerModule`) needs to be used everywhere without explicitly importing it, mark it as **global** using `@Global()`:
-
-```ts
-@Global()
-@Module({
-  providers: [DatabaseService],
-  exports: [DatabaseService],
-})
-export class DatabaseModule {}
-```
-  
----
-
-### 🧩 Dynamic Modules (Advanced)
-
-Dynamic modules allow configuration **at runtime** and are ideal for reusable packages and SDKs. A dynamic module returns a `ModuleMetadata` object from a static method.
-
-```ts
-@Module({})
-export class MyModule {
-  static register(options: Options): DynamicModule {
-    return {
-      module: MyModule,
-      providers: [
-        {
-          provide: 'CONFIG',
-          useValue: options,
-        },
-      ],
-      exports: ['CONFIG'],
-    };
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(LoggerMiddleware).forRoutes('cats');
   }
+}
+````
+
+---
+
+## Restricting by Method
+
+```ts
+import { RequestMethod } from '@nestjs/common';
+
+consumer
+  .apply(LoggerMiddleware)
+  .forRoutes({ path: 'cats', method: RequestMethod.GET });
+```
+
+---
+
+## Wildcard Routes
+
+Supports patterns:
+
+```ts
+consumer
+  .apply(LoggerMiddleware)
+  .forRoutes({ path: 'abcd/*splat', method: RequestMethod.ALL });
+```
+
+Or with optional wildcards:
+
+```ts
+consumer
+  .apply(LoggerMiddleware)
+  .forRoutes({ path: 'abcd/{*splat}', method: RequestMethod.ALL });
+```
+
+---
+
+## MiddlewareConsumer API
+
+Supports:
+
+* Single or multiple strings
+* RouteInfo objects
+* Controller classes
+
+Example:
+
+```ts
+consumer
+  .apply(LoggerMiddleware)
+  .forRoutes(CatsController);
+```
+
+---
+
+## Excluding Routes
+
+```ts
+consumer
+  .apply(LoggerMiddleware)
+  .exclude(
+    { path: 'cats', method: RequestMethod.GET },
+    { path: 'cats', method: RequestMethod.POST },
+    'cats/{*splat}',
+  )
+  .forRoutes(CatsController);
+```
+
+---
+
+## Functional Middleware
+
+Instead of a class, you can define middleware as a function:
+
+```ts
+// logger.middleware.ts
+import { Request, Response, NextFunction } from 'express';
+
+export function logger(req: Request, res: Response, next: NextFunction) {
+  console.log('Request...');
+  next();
 }
 ```
 
+Then apply:
+
+```ts
+consumer
+  .apply(logger)
+  .forRoutes(CatsController);
+```
+
+> ✅ Use functional middleware when no dependencies are required.
+
 ---
 
-### 📁 Suggested Structure
+## Multiple Middleware
 
+```ts
+consumer
+  .apply(cors(), helmet(), logger)
+  .forRoutes(CatsController);
 ```
-src/
-│
-├── app.module.ts         # Root module
-├── cats/
-│   ├── cats.module.ts
-│   ├── cats.controller.ts
-│   └── cats.service.ts
-├── users/
-│   ├── users.module.ts
-│   ├── users.controller.ts
-│   └── users.service.ts
+
+---
+
+## Global Middleware
+
+Apply middleware to **all routes**:
+
+```ts
+// main.ts
+const app = await NestFactory.create(AppModule);
+app.use(logger);
+await app.listen(process.env.PORT ?? 3000);
 ```
+
+> 📌 Use this for universal logging, security, or body parsing customizations.
+
+---
+
+## Notes
+
+* You can make `configure()` asynchronous using `async/await`.
+* To customize body-parser middleware, disable it via:
+
+  ```ts
+  NestFactory.create(AppModule, { bodyParser: false });
+  ```
+
+---
