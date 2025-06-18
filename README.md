@@ -1,205 +1,205 @@
-### ✅ **NestJS Guards - Essentials Recap**
+### 📁 File Structure for Interceptors in NestJS
 
-#### 1. **Basic Structure**
+```
+src/
+├── interceptors/
+│   ├── logging.interceptor.ts
+│   ├── transform.interceptor.ts
+│   ├── exclude-null.interceptor.ts
+│   ├── errors.interceptor.ts
+│   ├── cache.interceptor.ts
+│   └── timeout.interceptor.ts
+├── cats/
+│   ├── cats.controller.ts
+│   └── cats.service.ts
+├── app.module.ts
+└── main.ts
+```
 
-A Guard is a class that:
+---
 
-* Implements `CanActivate`
-* Returns `true` or `false` to allow or deny requests
+### Interceptors
+
+#### What are Interceptors?
+
+An **interceptor** is a class in NestJS annotated with `@Injectable()` and implements the `NestInterceptor` interface. Interceptors are powerful tools inspired by AOP (Aspect-Oriented Programming) and can manipulate the request/response lifecycle.
+
+---
+
+### ✨ What Can Interceptors Do?
+
+1. **Run code before/after a request is handled**
+2. **Transform the result** of a request (e.g., wrap it in a custom format)
+3. **Transform exceptions** before they're sent to the client
+4. **Extend controller behavior** (e.g., for caching, logging, etc.)
+5. **Completely override a response**
+
+---
+
+### 🛠 Basic Anatomy
 
 ```ts
 @Injectable()
-export class AuthGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest();
-    return validateRequest(request); // Your custom logic
+export class ExampleInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    // Logic before handler
+    return next.handle().pipe(
+      // Logic after handler
+    );
   }
 }
 ```
 
-#### 2. **Role-Based Guard**
+* `context`: Provides metadata (e.g., class, method, request).
+* `next.handle()`: Calls the route handler and returns an RxJS Observable.
+* Use RxJS operators like `map`, `tap`, `catchError`, `timeout`, etc., to manipulate the stream.
 
-You’ll use:
+---
 
-* `@SetMetadata()` or `Reflector.createDecorator()` for role metadata
-* `Reflector` in the guard to access metadata
-* A custom `@Roles()` decorator
+### 🚀 Example Interceptors
 
-**roles.decorator.ts**
-
-```ts
-import { SetMetadata } from '@nestjs/common';
-export const Roles = (...roles: string[]) => SetMetadata('roles', roles);
-```
-
-**roles.guard.ts**
+#### 1. 📝 LoggingInterceptor – Logs before & after route handler
 
 ```ts
-import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
-
 @Injectable()
-export class RolesGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
-
-  canActivate(context: ExecutionContext): boolean {
-    const requiredRoles = this.reflector.get<string[]>('roles', context.getHandler());
-    if (!requiredRoles) return true;
-
-    const { user } = context.switchToHttp().getRequest();
-    return requiredRoles.some(role => user?.roles?.includes(role));
+export class LoggingInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    console.log('Before...');
+    const now = Date.now();
+    return next.handle().pipe(
+      tap(() => console.log(`After... ${Date.now() - now}ms`)),
+    );
   }
 }
 ```
 
-#### 3. **Usage in Controller**
+#### 2. 🔁 TransformInterceptor – Wraps response inside `{ data: ... }`
 
 ```ts
-@UseGuards(RolesGuard)
-@Roles('admin')
-@Post('create')
-createCat(@Body() dto: CreateCatDto) {
-  return this.catService.create(dto);
-}
-```
-
----
-
-### 🛠️ **Advanced Option: Global Guard via DI**
-
-For app-wide enforcement:
-
-```ts
-// app.module.ts
-{
-  provide: APP_GUARD,
-  useClass: RolesGuard,
-}
-```
-
----
-
-## 🛡️ NestJS Guards – Role-Based Authorization
-
-Guards in NestJS are used to **control access to route handlers** based on runtime conditions like authentication and authorization.
-
-### 🔹 What is a Guard?
-
-A Guard is a class annotated with `@Injectable()` that implements the `CanActivate` interface. It determines whether a request should be processed or not.
-
-Guards run **after middleware** but **before interceptors and pipes**.
-
----
-
-### ✅ Use Case: Role-Based Access Control (RBAC)
-
-We’ll create a custom `@Roles()` decorator and a `RolesGuard` that allows access only to users with specific roles.
-
----
-
-### 📦 1. Create `@Roles()` Decorator
-
-```ts
-// src/auth/roles.decorator.ts
-import { SetMetadata } from '@nestjs/common';
-
-export const Roles = (...roles: string[]) => SetMetadata('roles', roles);
-```
-
----
-
-### 🛡️ 2. Create RolesGuard
-
-```ts
-// src/auth/roles.guard.ts
-import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
-
 @Injectable()
-export class RolesGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
+export class TransformInterceptor<T> implements NestInterceptor<T, { data: T }> {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<{ data: T }> {
+    return next.handle().pipe(map(data => ({ data })));
+  }
+}
+```
 
-  canActivate(context: ExecutionContext): boolean {
-    const requiredRoles = this.reflector.get<string[]>('roles', context.getHandler());
-    if (!requiredRoles) return true;
+#### 3. 🧹 ExcludeNullInterceptor – Converts nulls to empty strings
 
-    const { user } = context.switchToHttp().getRequest();
-    return requiredRoles.some(role => user?.roles?.includes(role));
+```ts
+@Injectable()
+export class ExcludeNullInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    return next.handle().pipe(map(value => value === null ? '' : value));
+  }
+}
+```
+
+#### 4. 🧯 ErrorsInterceptor – Catches errors and returns a friendly one
+
+```ts
+@Injectable()
+export class ErrorsInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    return next.handle().pipe(
+      catchError(err => throwError(() => new BadGatewayException()))
+    );
+  }
+}
+```
+
+#### 5. 🧊 CacheInterceptor – Skips handler and returns cached value
+
+```ts
+@Injectable()
+export class CacheInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    const isCached = true;
+    if (isCached) {
+      return of([]); // return fake cached response
+    }
+    return next.handle();
+  }
+}
+```
+
+#### 6. ⏱ TimeoutInterceptor – Fails if handler takes too long
+
+```ts
+@Injectable()
+export class TimeoutInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    return next.handle().pipe(
+      timeout(5000),
+      catchError(err => {
+        if (err instanceof TimeoutError) {
+          return throwError(() => new RequestTimeoutException());
+        }
+        return throwError(() => err);
+      }),
+    );
   }
 }
 ```
 
 ---
 
-### 🧠 3. Example Controller Usage
+### 🔗 Binding Interceptors
+
+#### 🟡 Method Scoped
 
 ```ts
-// src/cats/cats.controller.ts
-import { Controller, Post, Body, UseGuards } from '@nestjs/common';
-import { Roles } from '../auth/roles.decorator';
-import { RolesGuard } from '../auth/roles.guard';
+@UseInterceptors(LoggingInterceptor)
+@Get()
+findAll() {
+  return this.catService.findAll();
+}
+```
 
+#### 🟢 Controller Scoped
+
+```ts
+@UseInterceptors(LoggingInterceptor)
 @Controller('cats')
-@UseGuards(RolesGuard)
-export class CatsController {
-  @Post()
-  @Roles('admin')
-  createCat(@Body() dto: any) {
-    return 'Cat created!';
-  }
-}
+export class CatsController { ... }
 ```
 
----
-
-### 🌍 4. Register as a Global Guard (Optional)
+#### 🔵 Global (No Dependency Injection)
 
 ```ts
-// src/app.module.ts
-import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
-import { RolesGuard } from './auth/roles.guard';
-
-@Module({
-  providers: [
-    {
-      provide: APP_GUARD,
-      useClass: RolesGuard,
-    },
-  ],
-})
-export class AppModule {}
+const app = await NestFactory.create(AppModule);
+app.useGlobalInterceptors(new LoggingInterceptor());
 ```
 
-> ℹ️ Global guards apply across all routes, but cannot inject dependencies if created outside module scope. Use `APP_GUARD` inside a module for DI support.
+#### 🟣 Global with DI
 
----
-
-### 📌 Assumptions
-
-* `request.user` is set by an earlier authentication step (e.g., JWT AuthGuard).
-* User object includes a `roles: string[]` array.
-
----
-
-### 🧪 Example User Object
-
-```json
-{
-  "id": 1,
-  "username": "admin_user",
-  "roles": ["admin", "editor"]
-}
+```ts
+// In app.module.ts
+providers: [
+  {
+    provide: APP_INTERCEPTOR,
+    useClass: LoggingInterceptor,
+  },
+]
 ```
 
 ---
 
-### ❌ Unauthorized Request Response
+### 🧪 Testing Tip
 
-```json
-{
-  "statusCode": 403,
-  "message": "Forbidden resource",
-  "error": "Forbidden"
-}
-```
+In development, use `console.log()` inside the interceptors to see the lifecycle in action. When you call an API, you should see "Before..." and "After..." logs if `LoggingInterceptor` is applied.
+
+---
+
+### 📚 Summary
+
+| Use Case               | RxJS Operator  | Interceptor Class        |
+| ---------------------- | -------------- | ------------------------ |
+| Logging                | `tap()`        | `LoggingInterceptor`     |
+| Modify response        | `map()`        | `TransformInterceptor`   |
+| Replace nulls          | `map()`        | `ExcludeNullInterceptor` |
+| Handle exceptions      | `catchError()` | `ErrorsInterceptor`      |
+| Return cached response | `of()`         | `CacheInterceptor`       |
+| Timeout response       | `timeout()`    | `TimeoutInterceptor`     |
+
+---
