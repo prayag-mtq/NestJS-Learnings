@@ -1,275 +1,205 @@
-# NestJS Exception Filters
+### ✅ **NestJS Guards - Essentials Recap**
 
-NestJS provides a robust **exceptions layer** that handles all unhandled errors in a uniform, user-friendly manner. This system makes it easy to define custom behavior for different types of exceptions and HTTP responses.
+#### 1. **Basic Structure**
 
----
+A Guard is a class that:
 
-## 📦 Built-in Global Exception Handling
-
-By default, NestJS includes a global exception filter that handles all uncaught exceptions of type `HttpException` or its subclasses. When the exception is not recognized, NestJS returns:
-
-```json
-{
-  "statusCode": 500,
-  "message": "Internal server error"
-}
-```
-
-NestJS also partially supports the [http-errors](https://www.npmjs.com/package/http-errors) library if the exception object contains `statusCode` and `message`.
-
----
-
-## ⚠️ Throwing Standard Exceptions
-
-NestJS offers the `HttpException` class (from `@nestjs/common`) for throwing exceptions in route handlers.
-
-### Example
+* Implements `CanActivate`
+* Returns `true` or `false` to allow or deny requests
 
 ```ts
-@Get()
-async findAll() {
-  throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
-}
-```
-
-Response:
-
-```json
-{
-  "statusCode": 403,
-  "message": "Forbidden"
-}
-```
-
-### Custom Response Example
-
-```ts
-throw new HttpException({
-  status: HttpStatus.FORBIDDEN,
-  error: 'This is a custom message',
-}, HttpStatus.FORBIDDEN, {
-  cause: error
-});
-```
-
-Response:
-
-```json
-{
-  "status": 403,
-  "error": "This is a custom message"
-}
-```
-
----
-
-## 🧩 Built-in HTTP Exceptions
-
-Nest provides several built-in exceptions:
-
-* `BadRequestException`
-* `UnauthorizedException`
-* `NotFoundException`
-* `ForbiddenException`
-* `ConflictException`
-* `InternalServerErrorException`
-* *(and more)*
-
-### Example with description and cause
-
-```ts
-throw new BadRequestException('Something bad happened', {
-  cause: new Error(),
-  description: 'Some error description',
-});
-```
-
-Response:
-
-```json
-{
-  "message": "Something bad happened",
-  "error": "Some error description",
-  "statusCode": 400
-}
-```
-
----
-
-## 🎯 Custom Exceptions
-
-You can extend `HttpException` to create reusable custom exception classes.
-
-### Example
-
-```ts
-export class ForbiddenException extends HttpException {
-  constructor() {
-    super('Forbidden', HttpStatus.FORBIDDEN);
+@Injectable()
+export class AuthGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest();
+    return validateRequest(request); // Your custom logic
   }
 }
 ```
 
-Use it:
+#### 2. **Role-Based Guard**
+
+You’ll use:
+
+* `@SetMetadata()` or `Reflector.createDecorator()` for role metadata
+* `Reflector` in the guard to access metadata
+* A custom `@Roles()` decorator
+
+**roles.decorator.ts**
 
 ```ts
-throw new ForbiddenException();
+import { SetMetadata } from '@nestjs/common';
+export const Roles = (...roles: string[]) => SetMetadata('roles', roles);
+```
+
+**roles.guard.ts**
+
+```ts
+import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const requiredRoles = this.reflector.get<string[]>('roles', context.getHandler());
+    if (!requiredRoles) return true;
+
+    const { user } = context.switchToHttp().getRequest();
+    return requiredRoles.some(role => user?.roles?.includes(role));
+  }
+}
+```
+
+#### 3. **Usage in Controller**
+
+```ts
+@UseGuards(RolesGuard)
+@Roles('admin')
+@Post('create')
+createCat(@Body() dto: CreateCatDto) {
+  return this.catService.create(dto);
+}
 ```
 
 ---
 
-## 🛠 Custom Exception Filters
+### 🛠️ **Advanced Option: Global Guard via DI**
 
-To gain full control over error formatting or add features like logging, create a custom filter.
-
-### Example: `HttpExceptionFilter`
+For app-wide enforcement:
 
 ```ts
-import { ExceptionFilter, Catch, ArgumentsHost, HttpException } from '@nestjs/common';
-import { Request, Response } from 'express';
+// app.module.ts
+{
+  provide: APP_GUARD,
+  useClass: RolesGuard,
+}
+```
 
-@Catch(HttpException)
-export class HttpExceptionFilter implements ExceptionFilter {
-  catch(exception: HttpException, host: ArgumentsHost) {
-    const ctx = host.switchToHttp();
-    const response = ctx.getResponse<Response>();
-    const request = ctx.getRequest<Request>();
-    const status = exception.getStatus();
+---
 
-    response.status(status).json({
-      statusCode: status,
-      timestamp: new Date().toISOString(),
-      path: request.url,
-    });
+## 🛡️ NestJS Guards – Role-Based Authorization
+
+Guards in NestJS are used to **control access to route handlers** based on runtime conditions like authentication and authorization.
+
+### 🔹 What is a Guard?
+
+A Guard is a class annotated with `@Injectable()` that implements the `CanActivate` interface. It determines whether a request should be processed or not.
+
+Guards run **after middleware** but **before interceptors and pipes**.
+
+---
+
+### ✅ Use Case: Role-Based Access Control (RBAC)
+
+We’ll create a custom `@Roles()` decorator and a `RolesGuard` that allows access only to users with specific roles.
+
+---
+
+### 📦 1. Create `@Roles()` Decorator
+
+```ts
+// src/auth/roles.decorator.ts
+import { SetMetadata } from '@nestjs/common';
+
+export const Roles = (...roles: string[]) => SetMetadata('roles', roles);
+```
+
+---
+
+### 🛡️ 2. Create RolesGuard
+
+```ts
+// src/auth/roles.guard.ts
+import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const requiredRoles = this.reflector.get<string[]>('roles', context.getHandler());
+    if (!requiredRoles) return true;
+
+    const { user } = context.switchToHttp().getRequest();
+    return requiredRoles.some(role => user?.roles?.includes(role));
   }
 }
 ```
 
 ---
 
-## 🔗 Binding Filters
-
-### Method Scoped
+### 🧠 3. Example Controller Usage
 
 ```ts
-@Post()
-@UseFilters(HttpExceptionFilter)
-async create() {
-  throw new ForbiddenException();
+// src/cats/cats.controller.ts
+import { Controller, Post, Body, UseGuards } from '@nestjs/common';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
+
+@Controller('cats')
+@UseGuards(RolesGuard)
+export class CatsController {
+  @Post()
+  @Roles('admin')
+  createCat(@Body() dto: any) {
+    return 'Cat created!';
+  }
 }
 ```
 
-### Controller Scoped
+---
+
+### 🌍 4. Register as a Global Guard (Optional)
 
 ```ts
-@Controller()
-@UseFilters(HttpExceptionFilter)
-export class CatsController {}
-```
+// src/app.module.ts
+import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { RolesGuard } from './auth/roles.guard';
 
-### Global Scoped (in `main.ts`)
-
-```ts
-const app = await NestFactory.create(AppModule);
-app.useGlobalFilters(new HttpExceptionFilter());
-```
-
-### Global Scoped via Dependency Injection
-
-```ts
 @Module({
   providers: [
     {
-      provide: APP_FILTER,
-      useClass: HttpExceptionFilter,
+      provide: APP_GUARD,
+      useClass: RolesGuard,
     },
   ],
 })
 export class AppModule {}
 ```
 
+> ℹ️ Global guards apply across all routes, but cannot inject dependencies if created outside module scope. Use `APP_GUARD` inside a module for DI support.
+
 ---
 
-## 🌍 Catch-All Exception Filter
+### 📌 Assumptions
 
-To handle **any** exception:
+* `request.user` is set by an earlier authentication step (e.g., JWT AuthGuard).
+* User object includes a `roles: string[]` array.
 
-```ts
-import {
-  ExceptionFilter,
-  Catch,
-  ArgumentsHost,
-  HttpException,
-  HttpStatus,
-} from '@nestjs/common';
-import { HttpAdapterHost } from '@nestjs/core';
+---
 
-@Catch()
-export class CatchEverythingFilter implements ExceptionFilter {
-  constructor(private readonly httpAdapterHost: HttpAdapterHost) {}
+### 🧪 Example User Object
 
-  catch(exception: unknown, host: ArgumentsHost): void {
-    const { httpAdapter } = this.httpAdapterHost;
-    const ctx = host.switchToHttp();
-
-    const httpStatus =
-      exception instanceof HttpException
-        ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
-
-    const responseBody = {
-      statusCode: httpStatus,
-      timestamp: new Date().toISOString(),
-      path: httpAdapter.getRequestUrl(ctx.getRequest()),
-    };
-
-    httpAdapter.reply(ctx.getResponse(), responseBody, httpStatus);
-  }
+```json
+{
+  "id": 1,
+  "username": "admin_user",
+  "roles": ["admin", "editor"]
 }
 ```
 
 ---
 
-## 🧬 Inheriting from the Base Filter
+### ❌ Unauthorized Request Response
 
-Extend `BaseExceptionFilter` if you want to build on Nest's default behavior.
-
-```ts
-@Catch()
-export class AllExceptionsFilter extends BaseExceptionFilter {
-  catch(exception: unknown, host: ArgumentsHost) {
-    super.catch(exception, host);
-  }
+```json
+{
+  "statusCode": 403,
+  "message": "Forbidden resource",
+  "error": "Forbidden"
 }
 ```
-
-### With `HttpAdapter` injection
-
-```ts
-async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  const { httpAdapter } = app.get(HttpAdapterHost);
-
-  app.useGlobalFilters(new AllExceptionsFilter(httpAdapter));
-  await app.listen(process.env.PORT ?? 3000);
-}
-bootstrap();
-```
-
----
-
-## 🧠 Notes
-
-* Filters can be **method**, **controller**, or **global** scoped.
-* Global filters via `app.useGlobalFilters()` can't use DI; use `APP_FILTER` for DI support.
-* Use `@Catch()` with no arguments to handle all exception types.
-* Platform-agnostic filters use `HttpAdapterHost`.
-
----
-
-## 📚 Resources
-
-* [NestJS Docs: Exception Filters](https://docs.nestjs.com/exception-filters)
-* [Http Status Codes (MDN)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status)
-
----
