@@ -182,13 +182,6 @@ providers: [
   },
 ]
 ```
-
----
-
-### 🧪 Testing Tip
-
-In development, use `console.log()` inside the interceptors to see the lifecycle in action. When you call an API, you should see "Before..." and "After..." logs if `LoggingInterceptor` is applied.
-
 ---
 
 ### 📚 Summary
