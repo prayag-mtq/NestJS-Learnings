@@ -1,187 +1,201 @@
-# NestJS Exception Filters
+## 📦 What Are Pipes?
 
-NestJS provides a robust **exceptions layer** that handles all unhandled errors in a uniform, user-friendly manner. This system makes it easy to define custom behavior for different types of exceptions and HTTP responses.
+Pipes in NestJS:
 
----
+* **Transform** input data (e.g. string → number)
+* **Validate** data (e.g. ensure a DTO matches a schema)
+* Can be applied:
 
-## 📦 Built-in Global Exception Handling
+  * Per parameter
+  * Per route
+  * Globally (entire app)
 
-By default, NestJS includes a global exception filter that handles all uncaught exceptions of type `HttpException` or its subclasses. When the exception is not recognized, NestJS returns:
-
-```json
-{
-  "statusCode": 500,
-  "message": "Internal server error"
-}
-```
-
-NestJS also partially supports the [http-errors](https://www.npmjs.com/package/http-errors) library if the exception object contains `statusCode` and `message`.
+A pipe implements the `PipeTransform` interface and typically overrides the `transform()` method.
 
 ---
 
-## ⚠️ Throwing Standard Exceptions
+## 🏗️ Built-in Pipes
 
-NestJS offers the `HttpException` class (from `@nestjs/common`) for throwing exceptions in route handlers.
+Nest provides several built-in pipes:
 
-### Example
+| Pipe               | Description                                        |
+| ------------------ | -------------------------------------------------- |
+| `ParseIntPipe`     | Converts input to an integer                       |
+| `ParseBoolPipe`    | Converts to boolean                                |
+| `DefaultValuePipe` | Applies a fallback value                           |
+| `ValidationPipe`   | Validates objects using class-validator decorators |
+
+Example:
 
 ```ts
-@Get()
-async findAll() {
-  throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+@Get(':id')
+async findOne(@Param('id', ParseIntPipe) id: number) {
+  return this.service.findOne(id);
 }
 ```
 
-Response:
+---
 
-```json
-{
-  "statusCode": 403,
-  "message": "Forbidden"
-}
+## 🧪 Schema-Based Validation with Zod
+
+Zod is a schema validation library. You can create reusable pipes to validate request payloads.
+
+### ✅ Setup
+
+```bash
+npm install zod
 ```
 
-### Custom Response Example
+### 🧩 Create Schema
 
 ```ts
-throw new HttpException({
-  status: HttpStatus.FORBIDDEN,
-  error: 'This is a custom message',
-}, HttpStatus.FORBIDDEN, {
-  cause: error
+// create-cat.schema.ts
+import { z } from 'zod';
+
+export const createCatSchema = z.object({
+  name: z.string(),
+  age: z.number(),
+  breed: z.string(),
 });
+
+export type CreateCatDto = z.infer<typeof createCatSchema>;
 ```
 
-Response:
-
-```json
-{
-  "status": 403,
-  "error": "This is a custom message"
-}
-```
-
----
-
-## 🧩 Built-in HTTP Exceptions
-
-Nest provides several built-in exceptions:
-
-* `BadRequestException`
-* `UnauthorizedException`
-* `NotFoundException`
-* `ForbiddenException`
-* `ConflictException`
-* `InternalServerErrorException`
-* *(and more)*
-
-### Example with description and cause
+### 🧰 Create Pipe
 
 ```ts
-throw new BadRequestException('Something bad happened', {
-  cause: new Error(),
-  description: 'Some error description',
-});
-```
+// zod-validation.pipe.ts
+import { PipeTransform, ArgumentMetadata, BadRequestException } from '@nestjs/common';
+import { ZodSchema } from 'zod';
 
-Response:
+export class ZodValidationPipe implements PipeTransform {
+  constructor(private schema: ZodSchema) {}
 
-```json
-{
-  "message": "Something bad happened",
-  "error": "Some error description",
-  "statusCode": 400
-}
-```
-
----
-
-## 🎯 Custom Exceptions
-
-You can extend `HttpException` to create reusable custom exception classes.
-
-### Example
-
-```ts
-export class ForbiddenException extends HttpException {
-  constructor() {
-    super('Forbidden', HttpStatus.FORBIDDEN);
+  transform(value: unknown, metadata: ArgumentMetadata) {
+    try {
+      return this.schema.parse(value);
+    } catch (error) {
+      throw new BadRequestException('Validation failed');
+    }
   }
 }
 ```
 
-Use it:
+### 🧷 Use in Controller
 
 ```ts
-throw new ForbiddenException();
+// cats.controller.ts
+@Post()
+@UsePipes(new ZodValidationPipe(createCatSchema))
+create(@Body() createCatDto: CreateCatDto) {
+  return this.catsService.create(createCatDto);
+}
 ```
+
+> **Note:** Enable `strictNullChecks` in `tsconfig.json` for Zod.
 
 ---
 
-## 🛠 Custom Exception Filters
+## 🧪 Class Validator (Decorator-based)
 
-To gain full control over error formatting or add features like logging, create a custom filter.
+An alternative approach using `class-validator` decorators with DTOs.
 
-### Example: `HttpExceptionFilter`
+### ✅ Setup
+
+```bash
+npm install class-validator class-transformer
+```
+
+### 🧩 DTO with Decorators
 
 ```ts
-import { ExceptionFilter, Catch, ArgumentsHost, HttpException } from '@nestjs/common';
-import { Request, Response } from 'express';
+// create-cat.dto.ts
+import { IsString, IsInt } from 'class-validator';
 
-@Catch(HttpException)
-export class HttpExceptionFilter implements ExceptionFilter {
-  catch(exception: HttpException, host: ArgumentsHost) {
-    const ctx = host.switchToHttp();
-    const response = ctx.getResponse<Response>();
-    const request = ctx.getRequest<Request>();
-    const status = exception.getStatus();
+export class CreateCatDto {
+  @IsString()
+  name: string;
 
-    response.status(status).json({
-      statusCode: status,
-      timestamp: new Date().toISOString(),
-      path: request.url,
-    });
+  @IsInt()
+  age: number;
+
+  @IsString()
+  breed: string;
+}
+```
+
+### 🧰 Create Validation Pipe
+
+```ts
+// validation.pipe.ts
+import {
+  PipeTransform,
+  Injectable,
+  ArgumentMetadata,
+  BadRequestException,
+} from '@nestjs/common';
+import { validate } from 'class-validator';
+import { plainToInstance } from 'class-transformer';
+
+@Injectable()
+export class ValidationPipe implements PipeTransform<any> {
+  async transform(value: any, { metatype }: ArgumentMetadata) {
+    if (!metatype || !this.toValidate(metatype)) return value;
+
+    const object = plainToInstance(metatype, value);
+    const errors = await validate(object);
+
+    if (errors.length > 0) {
+      throw new BadRequestException('Validation failed');
+    }
+    return value;
+  }
+
+  private toValidate(metatype: Function): boolean {
+    const types: Function[] = [String, Boolean, Number, Array, Object];
+    return !types.includes(metatype);
   }
 }
 ```
 
----
-
-## 🔗 Binding Filters
-
-### Method Scoped
+### 🧷 Use in Controller
 
 ```ts
 @Post()
-@UseFilters(HttpExceptionFilter)
-async create() {
-  throw new ForbiddenException();
+create(@Body(new ValidationPipe()) createCatDto: CreateCatDto) {
+  return this.catsService.create(createCatDto);
 }
 ```
 
-### Controller Scoped
+---
+
+## 🌐 Global Validation Pipe
+
+To validate all inputs across your app:
 
 ```ts
-@Controller()
-@UseFilters(HttpExceptionFilter)
-export class CatsController {}
+// main.ts
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.useGlobalPipes(new ValidationPipe());
+  await app.listen(3000);
+}
+bootstrap();
 ```
 
-### Global Scoped (in `main.ts`)
+Or enable DI via `APP_PIPE`:
 
 ```ts
-const app = await NestFactory.create(AppModule);
-app.useGlobalFilters(new HttpExceptionFilter());
-```
+// app.module.ts
+import { Module } from '@nestjs/common';
+import { APP_PIPE } from '@nestjs/core';
+import { ValidationPipe } from './common/pipes/validation.pipe';
 
-### Global Scoped via Dependency Injection
-
-```ts
 @Module({
   providers: [
     {
-      provide: APP_FILTER,
-      useClass: HttpExceptionFilter,
+      provide: APP_PIPE,
+      useClass: ValidationPipe,
     },
   ],
 })
@@ -190,86 +204,61 @@ export class AppModule {}
 
 ---
 
-## 🌍 Catch-All Exception Filter
+## 🔁 Transformation Use Case
 
-To handle **any** exception:
+Pipes can also **convert** data types.
+
+### 🧰 Example: ParseIntPipe
 
 ```ts
-import {
-  ExceptionFilter,
-  Catch,
-  ArgumentsHost,
-  HttpException,
-  HttpStatus,
-} from '@nestjs/common';
-import { HttpAdapterHost } from '@nestjs/core';
+// parse-int.pipe.ts
+import { PipeTransform, Injectable, ArgumentMetadata, BadRequestException } from '@nestjs/common';
 
-@Catch()
-export class CatchEverythingFilter implements ExceptionFilter {
-  constructor(private readonly httpAdapterHost: HttpAdapterHost) {}
-
-  catch(exception: unknown, host: ArgumentsHost): void {
-    const { httpAdapter } = this.httpAdapterHost;
-    const ctx = host.switchToHttp();
-
-    const httpStatus =
-      exception instanceof HttpException
-        ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
-
-    const responseBody = {
-      statusCode: httpStatus,
-      timestamp: new Date().toISOString(),
-      path: httpAdapter.getRequestUrl(ctx.getRequest()),
-    };
-
-    httpAdapter.reply(ctx.getResponse(), responseBody, httpStatus);
+@Injectable()
+export class ParseIntPipe implements PipeTransform<string, number> {
+  transform(value: string, metadata: ArgumentMetadata): number {
+    const val = parseInt(value, 10);
+    if (isNaN(val)) {
+      throw new BadRequestException('Validation failed');
+    }
+    return val;
   }
 }
 ```
 
----
-
-## 🧬 Inheriting from the Base Filter
-
-Extend `BaseExceptionFilter` if you want to build on Nest's default behavior.
+Usage:
 
 ```ts
-@Catch()
-export class AllExceptionsFilter extends BaseExceptionFilter {
-  catch(exception: unknown, host: ArgumentsHost) {
-    super.catch(exception, host);
-  }
+@Get(':id')
+findOne(@Param('id', new ParseIntPipe()) id: number) {
+  return this.service.findOne(id);
 }
 ```
 
-### With `HttpAdapter` injection
+---
+
+## 🧱 Providing Defaults with DefaultValuePipe
+
+You can chain pipes to provide default values:
 
 ```ts
-async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  const { httpAdapter } = app.get(HttpAdapterHost);
-
-  app.useGlobalFilters(new AllExceptionsFilter(httpAdapter));
-  await app.listen(process.env.PORT ?? 3000);
+@Get()
+findAll(
+  @Query('activeOnly', new DefaultValuePipe(false), ParseBoolPipe) activeOnly: boolean,
+  @Query('page', new DefaultValuePipe(0), ParseIntPipe) page: number,
+) {
+  return this.service.findAll({ activeOnly, page });
 }
-bootstrap();
 ```
 
 ---
 
-## 🧠 Notes
+## 🔒 Best Practices
 
-* Filters can be **method**, **controller**, or **global** scoped.
-* Global filters via `app.useGlobalFilters()` can't use DI; use `APP_FILTER` for DI support.
-* Use `@Catch()` with no arguments to handle all exception types.
-* Platform-agnostic filters use `HttpAdapterHost`.
-
----
-
-## 📚 Resources
-
-* [NestJS Docs: Exception Filters](https://docs.nestjs.com/exception-filters)
-* [Http Status Codes (MDN)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status)
+* ✅ Prefer built-in `ValidationPipe` unless you need advanced schema control
+* ✅ Use `@UsePipes()` for reusable pipes
+* ✅ Apply global validation for clean codebase
+* ⚠️ Don’t rely on middleware for validation (no access to handler metadata)
+* ⚠️ Zod: Enable `strictNullChecks`
 
 ---
