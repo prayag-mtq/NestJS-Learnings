@@ -1,155 +1,335 @@
+# 🧩 NestJS Configuration with @nestjs/config
 
-# 📘 ModuleRef in NestJS
+This guide provides **a complete walkthrough** of handling environment-based configuration in NestJS using `@nestjs/config`. It includes `.env` management, config files, YAML, validation, conditional modules, and more — both theory and practical code.
 
-NestJS provides the `ModuleRef` class to:
+---
 
-* Dynamically **access providers** registered in the DI container.
-* **Resolve request-scoped or transient** providers on demand.
-* **Create custom class instances** dynamically.
-* **Register request context** for custom-scoped providers.
+## 📘 Theory
+
+### ✅ Why Configuration Matters
+
+Applications behave differently based on the environment (e.g., dev, staging, prod). Using config:
+
+* Keeps secrets and credentials out of code.
+* Enables dynamic behavior based on environment.
+* Makes apps portable, predictable, and easier to test.
+
+### ✅ process.env & .env
+
+* Node.js allows access to environment variables via `process.env`.
+* The `.env` file is a simple key-value format (e.g., `DB_HOST=localhost`).
+* Best practice is to avoid hardcoding values in source files and instead rely on environment variables.
+
+### ✅ Why @nestjs/config
+
+NestJS provides the `@nestjs/config` package which:
+
+* Automatically loads `.env` files.
+* Uses `dotenv` and `dotenv-expand` under the hood.
+* Supports schema validation (with `Joi` or `class-validator`).
+* Allows modular, typed, nested config access.
+* Supports conditional module loading.
 
 ---
 
 ## 📁 File Structure
 
-```
+```bash
 src/
-│
-├── cats/
-│   ├── cats.service.ts           ← Uses ModuleRef to resolve providers
-│   ├── cats.repository.ts        ← Example repository (can be request-scoped)
-│   └── cats.factory.ts           ← Example factory class created dynamically
-│
-├── shared/
-│   └── transient.service.ts      ← Transient scoped service to demonstrate resolution
-│
-└── main.ts                       ← Can be used for request simulation if needed
+├── app.module.ts
+├── main.ts
+├── config/
+│   ├── configuration.ts           # JS object config
+│   ├── database.config.ts         # Namespaced config
+│   ├── config.yaml                # YAML config
+│   └── env.validation.ts          # Validation logic
+.env
+.env.development
+nest-cli.json                      # Ensure YAML files copied to dist
 ```
 
 ---
 
-## 📌 Where and What to Add
+## 🧩 Setup Instructions
 
-### 1. `cats.service.ts` – Uses `ModuleRef` for various use cases
+### 🔌 Install Dependencies
+
+```bash
+npm i --save @nestjs/config
+npm i js-yaml
+npm i joi class-validator class-transformer
+npm i -D @types/js-yaml
+```
+
+### ⚙️ Enable Config in AppModule
 
 ```ts
-// src/cats/cats.service.ts
-import {
-  Injectable,
-  OnModuleInit,
-  Scope,
-  Inject,
-} from '@nestjs/common';
-import { ModuleRef, ContextIdFactory, REQUEST } from '@nestjs/core';
-import { CatsRepository } from './cats.repository';
-import { TransientService } from '../shared/transient.service';
-import { CatsFactory } from './cats.factory';
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import configuration from './config/configuration';
+import databaseConfig from './config/database.config';
+import { validate } from './config/env.validation';
 
-@Injectable({ scope: Scope.REQUEST })
-export class CatsService implements OnModuleInit {
-  constructor(
-    private moduleRef: ModuleRef,
-    @Inject(REQUEST) private readonly request: Record<string, any>, // For request context
-  ) {}
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env.development.local', '.env.development'],
+      load: [configuration, databaseConfig],
+      validationSchema: Joi.object({
+        NODE_ENV: Joi.string().valid('development', 'production').default('development'),
+        PORT: Joi.number().port().default(3000),
+      }),
+      validationOptions: {
+        allowUnknown: false,
+        abortEarly: true,
+      },
+      expandVariables: true,
+      cache: true,
+      validate,
+    }),
+  ],
+})
+export class AppModule {}
+```
 
-  async onModuleInit() {
-    // 1. Static Resolution
-    const staticService = this.moduleRef.get(TransientService, { strict: false });
+---
 
-    // 2. Transient Resolution (creates NEW instance every call)
-    const t1 = await this.moduleRef.resolve(TransientService);
-    const t2 = await this.moduleRef.resolve(TransientService);
-    console.log('Are t1 and t2 equal?', t1 === t2); // false
+## 🔐 .env Example
 
-    // 3. Transient resolution with context (same instance)
-    const contextId = ContextIdFactory.getByRequest(this.request);
-    const ts1 = await this.moduleRef.resolve(TransientService, contextId);
-    const ts2 = await this.moduleRef.resolve(TransientService, contextId);
-    console.log('Same instance with context?', ts1 === ts2); // true
+```env
+NODE_ENV=development
+PORT=3000
+APP_URL=mywebsite.com
+SUPPORT_EMAIL=support@${APP_URL}
+DATABASE_HOST=localhost
+DATABASE_PORT=5432
+```
 
-    // 4. Request-scoped provider resolution
-    const catsRepo = await this.moduleRef.resolve(CatsRepository, contextId);
+---
 
-    // 5. Dynamically instantiate a class not in providers
-    const catsFactory = await this.moduleRef.create(CatsFactory);
-    catsFactory.log(); // Output from dynamic factory
+## 🔧 Custom Configuration File
+
+### `configuration.ts`
+
+```ts
+export default () => ({
+  port: parseInt(process.env.PORT, 10) || 3000,
+  database: {
+    host: process.env.DATABASE_HOST,
+    port: parseInt(process.env.DATABASE_PORT, 10) || 5432,
+  },
+});
+```
+
+* Groups config logically.
+* Supports nested access via `configService.get('database.port')`.
+
+---
+
+## 🧱 Namespaced Config
+
+### `database.config.ts`
+
+```ts
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('database', () => ({
+  host: process.env.DATABASE_HOST,
+  port: parseInt(process.env.DATABASE_PORT, 10) || 5432,
+}));
+```
+
+### Usage:
+
+```ts
+const host = configService.get<string>('database.host');
+```
+
+Or inject with strong typing:
+
+```ts
+constructor(
+  @Inject(databaseConfig.KEY)
+  private readonly dbConfig: ConfigType<typeof databaseConfig>,
+) {}
+```
+
+---
+
+## 📑 YAML Configuration Support
+
+### `config.yaml`
+
+```yaml
+http:
+  host: localhost
+  port: 8080
+```
+
+### `configuration.ts` for YAML
+
+```ts
+import { readFileSync } from 'fs';
+import * as yaml from 'js-yaml';
+import { join } from 'path';
+
+export default () => {
+  return yaml.load(
+    readFileSync(join(__dirname, 'config.yaml'), 'utf8'),
+  ) as Record<string, any>;
+};
+```
+
+### `nest-cli.json`
+
+```json
+{
+  "compilerOptions": {
+    "assets": [
+      {
+        "include": "src/config/*.yaml",
+        "outDir": "dist/config"
+      }
+    ]
   }
 }
 ```
 
 ---
 
-### 2. `cats.repository.ts` – Request-scoped provider
+## 🧪 Validation
+
+### ✅ Joi Schema
 
 ```ts
-// src/cats/cats.repository.ts
-import { Injectable, Scope } from '@nestjs/common';
+validationSchema: Joi.object({
+  PORT: Joi.number().port().required(),
+  NODE_ENV: Joi.string().valid('development', 'production'),
+})
+```
 
-@Injectable({ scope: Scope.REQUEST })
-export class CatsRepository {
-  getData() {
-    return 'Repo data';
+### ✅ class-validator Method
+
+```ts
+export class EnvVars {
+  @IsEnum(['development', 'production'])
+  NODE_ENV: string;
+
+  @IsNumber()
+  @Min(1000)
+  @Max(65535)
+  PORT: number;
+}
+```
+
+```ts
+export function validate(config: Record<string, unknown>) {
+  const validated = plainToInstance(EnvVars, config, {
+    enableImplicitConversion: true,
+  });
+  const errors = validateSync(validated, { skipMissingProperties: false });
+  if (errors.length > 0) throw new Error(errors.toString());
+  return validated;
+}
+```
+
+---
+
+## 🧠 Advanced Features
+
+### 🧠 Expandable Variables
+
+```env
+APP_URL=domain.com
+SUPPORT_EMAIL=support@${APP_URL}
+```
+
+Enabled via `expandVariables: true`.
+
+---
+
+### ⚙️ Conditional Modules
+
+```ts
+import { ConditionalModule } from '@nestjs/config';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot(),
+    ConditionalModule.registerWhen(
+      FooModule,
+      (env) => env['USE_FOO'] === 'true'
+    ),
+  ],
+})
+```
+
+---
+
+### 🧩 Partial Config with `forFeature()`
+
+```ts
+@Module({
+  imports: [ConfigModule.forFeature(databaseConfig)],
+})
+export class DatabaseModule {}
+```
+
+Use `onModuleInit()` if values aren't available in constructor.
+
+---
+
+## 🎯 Usage in Code
+
+### Inject ConfigService
+
+```ts
+@Injectable()
+export class SomeService {
+  constructor(private configService: ConfigService) {}
+
+  get port() {
+    return this.configService.get<number>('PORT');
+  }
+
+  get dbHost() {
+    return this.configService.get<string>('database.host', 'localhost');
   }
 }
 ```
 
 ---
 
-### 3. `transient.service.ts` – Transient-scoped provider
+## 🚀 Usage in `main.ts`
 
 ```ts
-// src/shared/transient.service.ts
-import { Injectable, Scope } from '@nestjs/common';
-
-@Injectable({ scope: Scope.TRANSIENT })
-export class TransientService {
-  id = Math.random();
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  const config = app.get(ConfigService);
+  const port = config.get<number>('PORT');
+  await app.listen(port);
 }
+bootstrap();
 ```
 
 ---
 
-### 4. `cats.factory.ts` – Custom class not registered as a provider
+## 🧪 Testing
 
-```ts
-// src/cats/cats.factory.ts
-export class CatsFactory {
-  log() {
-    console.log('🐱 CatsFactory created dynamically');
-  }
-}
+Mock the environment in `.env.test`, or override in CI with `export VAR=value`.
+
+```bash
+NODE_ENV=test PORT=4000 nest start
 ```
 
 ---
 
-## 🧪 Example Usage Summary
+## 🧷 Best Practices
 
-| Scenario                       | Method                      | Description                                     |
-| ------------------------------ | --------------------------- | ----------------------------------------------- |
-| Static provider                | `get()`                     | Resolves a singleton-scoped provider            |
-| Transient provider             | `resolve()`                 | Returns new instance per call                   |
-| Scoped provider (same request) | `resolve(token, contextId)` | Shares instance across services for one request |
-| Custom class instantiation     | `create()`                  | Instantiates class not declared as provider     |
-
----
-
-## 🎯 When to Use
-
-| Use Case                                   | Tool                                     |
-| ------------------------------------------ | ---------------------------------------- |
-| Access existing provider dynamically       | `moduleRef.get()`                        |
-| Resolve scoped or transient provider       | `moduleRef.resolve()`                    |
-| Inject same scoped provider within request | `ContextIdFactory.getByRequest()`        |
-| Inject provider from another module        | `get(token, { strict: false })`          |
-| Instantiate custom classes                 | `moduleRef.create()`                     |
-| Register custom request context            | `moduleRef.registerRequestByContextId()` |
-
----
-
-## ⚠️ Notes
-
-* **Avoid using `get()` for transient/request-scoped** providers – use `resolve()` instead.
-* Make sure to **inject `REQUEST`** if using context-aware resolution.
-* `ContextIdFactory.create()` is for **manual DI trees**; not auto-managed by Nest.
-* Don't forget to **register providers** like `TransientService`, `CatsRepository` in a module.
+* ✅ Validate all required variables
+* ✅ Separate environments (`.env.production`, `.env.development`)
+* ✅ Use namespaces for modular config
+* ✅ Load only what is needed using `forFeature()`
+* ✅ Avoid direct access to `process.env` outside config files
 
