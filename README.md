@@ -1,167 +1,197 @@
-# 📘 NestJS Versioning Guide
+# 🕒 NestJS Task Scheduling Guide
 
-Versioning in NestJS allows you to support multiple API versions simultaneously. This is crucial for applications that undergo breaking changes while still needing to support older versions.
+NestJS provides powerful and flexible task scheduling capabilities via the `@nestjs/schedule` package. This enables you to execute arbitrary methods:
 
-> ⚠️ This only applies to **HTTP-based applications**.
-
----
-
-## 🤔 Why Versioning?
-
-- Maintain **backward compatibility**
-- Enable smooth **transition for clients** to newer versions
-- Avoid breaking changes affecting existing consumers
+- At specific times (using cron expressions)
+- At regular intervals (like every 10 seconds)
+- Once after a delay (timeout)
+- Dynamically at runtime
 
 ---
 
-## 🧩 Versioning Types
+## ⚙️ Installation
 
-| Type       | Description                                                    |
-| ---------- | -------------------------------------------------------------- |
-| URI        | Default. Adds version in URL path like `/v1/cats`              |
-| Header     | Uses a custom header (e.g., `Custom-Header: 1`)                |
-| Media Type | Version defined in `Accept` header like `application/json;v=2` |
-| Custom     | Uses custom logic to extract version from any request property |
-
-All types use the enum `VersioningType` from `@nestjs/common`.
-
----
-
-## ⚙️ Enabling Versioning in `main.ts`
-
-### 📌 URI Versioning (Default)
-
-```ts
-app.enableVersioning({
-  type: VersioningType.URI,
-});
+```bash
+npm install --save @nestjs/schedule
 ```
 
-Set a custom prefix or disable it:
+Then, register `ScheduleModule` in your root `AppModule`:
 
 ```ts
-app.enableVersioning({
-  type: VersioningType.URI,
-  prefix: 'v', // or false to disable
-});
-```
+import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 
-### 📌 Header Versioning
-
-```ts
-app.enableVersioning({
-  type: VersioningType.HEADER,
-  header: 'Custom-Header',
-});
-```
-
-### 📌 Media Type Versioning
-
-```ts
-app.enableVersioning({
-  type: VersioningType.MEDIA_TYPE,
-  key: 'v=', // Accept: application/json;v=2
-});
-```
-
-### 📌 Custom Versioning
-
-```ts
-const extractor = (req: Request): string[] =>
-  [req.headers['custom-version'] ?? '']
-    .flatMap((v) => v.split(','))
-    .filter(Boolean)
-    .sort()
-    .reverse();
-
-app.enableVersioning({
-  type: VersioningType.CUSTOM,
-  extractor,
-});
+@Module({
+  imports: [ScheduleModule.forRoot()],
+})
+export class AppModule {}
 ```
 
 ---
 
-## 🎯 Applying Versions
+## ⏲️ Declarative Scheduling
 
-### ✅ Versioned Controller
+### 📆 Cron Jobs
+
+Use `@Cron()` to run a method based on a cron pattern:
 
 ```ts
-@Controller({ version: '1' })
-export class CatsControllerV1 {
-  @Get('cats')
-  findAll() {
-    return 'V1 cats';
-  }
+@Cron('45 * * * * *')
+handleCron() {
+  this.logger.debug('Runs every minute at 45 seconds');
 }
 ```
 
-### ✅ Versioned Routes
+#### 🧠 Cron Syntax
+
+```
+* * * * * *
+| | | | | |
+| | | | | day of week
+| | | | month
+| | | day of month
+| | hour
+| minute
+second (optional)
+```
+
+#### ⏱ Common Patterns (CronExpression Enum)
 
 ```ts
-@Controller()
-export class CatsController {
-  @Version('1')
-  @Get('cats')
-  findAllV1() {
-    return 'V1 cats';
-  }
+@Cron(CronExpression.EVERY_30_SECONDS)
+```
 
-  @Version('2')
-  @Get('cats')
-  findAllV2() {
-    return 'V2 cats';
-  }
+#### 🧾 One-Time Execution
+
+```ts
+@Cron(new Date(Date.now() + 10_000)) // 10 seconds after app start
+```
+
+#### 🔧 Options
+
+```ts
+@Cron('* * 0 * * *', {
+  name: 'nightJob',
+  timeZone: 'Europe/Paris',
+  waitForCompletion: true,
+})
+```
+
+---
+
+### 🔁 Intervals
+
+```ts
+@Interval(10000)
+handleInterval() {
+  this.logger.debug('Runs every 10 seconds');
 }
 ```
 
-### ✅ Multiple Versions
+With name:
 
 ```ts
-@Controller({ version: ['1', '2'] })
-export class CatsController {
-  @Get('cats')
-  findAll() {
-    return 'Available in V1 and V2';
-  }
+@Interval('heartbeat', 5000)
+```
+
+---
+
+### ⏳ Timeouts
+
+```ts
+@Timeout(5000)
+handleTimeout() {
+  this.logger.debug('Runs once after 5 seconds');
 }
 ```
 
-### ✅ Version Neutral
+With name:
 
 ```ts
-@Controller({ version: VERSION_NEUTRAL })
-export class NeutralController {
-  @Get('health')
-  check() {
-    return 'Accessible from any version';
-  }
+@Timeout('startupTask', 3000)
+```
+
+---
+
+## 🧬 Dynamic API (SchedulerRegistry)
+
+Import and inject:
+
+```ts
+constructor(private schedulerRegistry: SchedulerRegistry) {}
+```
+
+### 🌀 Dynamic Cron Jobs
+
+```ts
+addCronJob(name: string, second: string) {
+  const job = new CronJob(`${second} * * * * *`, () => {
+    this.logger.warn(`Cron ${name} triggered at ${second}s`);
+  });
+
+  this.schedulerRegistry.addCronJob(name, job);
+  job.start();
+}
+```
+
+```ts
+const job = this.schedulerRegistry.getCronJob('nightJob');
+job.stop();
+console.log(job.nextDates());
+```
+
+Delete:
+
+```ts
+deleteCron(name: string) {
+  this.schedulerRegistry.deleteCronJob(name);
 }
 ```
 
 ---
 
-## 🛠 Default Version
+### ⏲ Dynamic Intervals
+
+Create:
 
 ```ts
-app.enableVersioning({
-  type: VersioningType.URI,
-  defaultVersion: '1', // Or VERSION_NEUTRAL or array ['1', '2']
-});
+addInterval(name: string, ms: number) {
+  const interval = setInterval(() => {
+    this.logger.warn(`Interval ${name} at ${ms}ms`);
+  }, ms);
+
+  this.schedulerRegistry.addInterval(name, interval);
+}
+```
+
+Get & Clear:
+
+```ts
+const interval = this.schedulerRegistry.getInterval('heartbeat');
+clearInterval(interval);
 ```
 
 ---
 
-## 🧱 Middleware Versioning
+### ⏱ Dynamic Timeouts
 
-Apply middleware only for specific versioned routes:
+Create:
 
 ```ts
-consumer.apply(LoggerMiddleware).forRoutes({
-  path: 'cats',
-  method: RequestMethod.GET,
-  version: '2',
-});
+addTimeout(name: string, ms: number) {
+  const timeout = setTimeout(() => {
+    this.logger.warn(`Timeout ${name} after ${ms}ms`);
+  }, ms);
+
+  this.schedulerRegistry.addTimeout(name, timeout);
+}
+```
+
+Get & Clear:
+
+```ts
+const timeout = this.schedulerRegistry.getTimeout('startupTask');
+clearTimeout(timeout);
 ```
 
 ---
@@ -170,43 +200,9 @@ consumer.apply(LoggerMiddleware).forRoutes({
 
 ```bash
 src/
-├── main.ts                # Enable versioning here
-├── cats/
-│   ├── cats.controller.ts # Versioned controllers and routes
-├── common/
-│   └── middleware/
-│       └── logger.middleware.ts # Middleware for versioned routes
-```
-
----
-
-## 🧪 Examples
-
-### 🔍 URI Request Example
-
-```
-GET /v1/cats
-GET /v2/cats
-```
-
-### 🔍 Header Version Request Example
-
-```
-GET /cats
-Custom-Header: 2
-```
-
-### 🔍 Media Type Version Request Example
-
-```
-GET /cats
-Accept: application/json;v=2
-```
-
-### 🔍 Custom Versioning Request Example
-
-```
-GET /cats
-custom-version: 3,2,1
+├── app.module.ts              # Register ScheduleModule
+├── tasks/
+│   ├── tasks.service.ts       # @Cron, @Interval, @Timeout
+│   └── dynamic.controller.ts  # Runtime job control
 ```
 
