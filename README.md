@@ -1,98 +1,251 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 🔐 NestJS Authentication (JWT) Guide
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Authentication is a fundamental part of most applications. In this guide, you'll learn how to implement **username/password authentication** with **JWT support**, and how to **protect routes** using guards in NestJS.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## 📦 Installation
 
 ```bash
-$ npm install
+npm install --save @nestjs/jwt
 ```
 
-## Compile and run the project
+---
+
+## 📁 File Structure
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+src/
+├── auth/
+│   ├── auth.controller.ts      # Auth endpoints
+│   ├── auth.service.ts         # Auth logic
+│   ├── auth.module.ts          # Auth module
+│   ├── auth.guard.ts           # JWT guard
+│   ├── constants.ts            # JWT secret
+│   └── public.decorator.ts     # @Public() decorator
+├── users/
+│   ├── users.service.ts        # User lookup logic
+│   └── users.module.ts         # User module
 ```
 
-## Run tests
+---
+
+## 🚀 Setup Steps
+
+### 1. Create Modules and Services
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+nest g module auth && nest g controller auth && nest g service auth
+nest g module users && nest g service users
 ```
 
-## Deployment
+### 2. `UsersService` (In-memory users)
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+```ts
+// users/users.service.ts
+@Injectable()
+export class UsersService {
+  private readonly users = [
+    { userId: 1, username: 'john', password: 'changeme' },
+    { userId: 2, username: 'maria', password: 'guess' },
+  ];
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+  async findOne(username: string) {
+    return this.users.find((user) => user.username === username);
+  }
+}
+```
+
+### 3. `UsersModule`
+
+```ts
+// users/users.module.ts
+@Module({
+  providers: [UsersService],
+  exports: [UsersService],
+})
+export class UsersModule {}
+```
+
+---
+
+## 🛂 Authentication Logic
+
+### 4. AuthService
+
+```ts
+// auth/auth.service.ts
+@Injectable()
+export class AuthService {
+  constructor(
+    private usersService: UsersService,
+    private jwtService: JwtService,
+  ) {}
+
+  async signIn(
+    username: string,
+    pass: string,
+  ): Promise<{ access_token: string }> {
+    const user = await this.usersService.findOne(username);
+    if (user?.password !== pass) {
+      throw new UnauthorizedException();
+    }
+    const payload = { sub: user.userId, username: user.username };
+    return {
+      access_token: await this.jwtService.signAsync(payload),
+    };
+  }
+}
+```
+
+### 5. AuthController
+
+```ts
+// auth/auth.controller.ts
+@Controller('auth')
+export class AuthController {
+  constructor(private authService: AuthService) {}
+
+  @HttpCode(HttpStatus.OK)
+  @Post('login')
+  signIn(@Body() body: { username: string; password: string }) {
+    return this.authService.signIn(body.username, body.password);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('profile')
+  getProfile(@Request() req) {
+    return req.user;
+  }
+}
+```
+
+### 6. JWT Constants
+
+```ts
+// auth/constants.ts
+export const jwtConstants = {
+  secret: 'SUPER_SECRET_KEY_DO_NOT_SHARE',
+};
+```
+
+### 7. Auth Module
+
+```ts
+// auth/auth.module.ts
+@Module({
+  imports: [
+    UsersModule,
+    JwtModule.register({
+      global: true,
+      secret: jwtConstants.secret,
+      signOptions: { expiresIn: '60s' },
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService],
+  exports: [AuthService],
+})
+export class AuthModule {}
+```
+
+---
+
+## 🔐 Protecting Routes
+
+### 8. Auth Guard
+
+```ts
+// auth/auth.guard.ts
+@Injectable()
+export class AuthGuard implements CanActivate {
+  constructor(
+    private jwtService: JwtService,
+    private reflector: Reflector,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) return true;
+
+    const request = context.switchToHttp().getRequest();
+    const token = this.extractTokenFromHeader(request);
+    if (!token) throw new UnauthorizedException();
+
+    try {
+      const payload = await this.jwtService.verifyAsync(token, {
+        secret: jwtConstants.secret,
+      });
+      request['user'] = payload;
+    } catch {
+      throw new UnauthorizedException();
+    }
+    return true;
+  }
+
+  private extractTokenFromHeader(request: Request): string | undefined {
+    const [type, token] = request.headers.authorization?.split(' ') ?? [];
+    return type === 'Bearer' ? token : undefined;
+  }
+}
+```
+
+### 9. Register Global Guard (optional)
+
+```ts
+// app.module.ts or auth.module.ts
+{
+  provide: APP_GUARD,
+  useClass: AuthGuard,
+}
+```
+
+### 10. Public Route Decorator
+
+```ts
+// auth/public.decorator.ts
+export const IS_PUBLIC_KEY = 'isPublic';
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+```
+
+### 11. Use Public Decorator
+
+```ts
+@Public()
+@Get('health')
+healthCheck() {
+  return 'OK';
+}
+```
+
+---
+
+## 🧪 Example cURL Usage
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Login
+curl -X POST http://localhost:3000/auth/login \
+  -d '{"username": "john", "password": "changeme"}' \
+  -H "Content-Type: application/json"
+
+# Use JWT for protected route
+curl http://localhost:3000/auth/profile \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+---
 
-## Resources
+## ✅ Summary
 
-Check out a few resources that may come in handy when working with NestJS:
+| Feature              | Status |
+| -------------------- | ------ |
+| JWT Authentication   | ✅     |
+| Guard-based Security | ✅     |
+| Public Route Support | ✅     |
+| Global Guard Option  | ✅     |
+| User Service (Mock)  | ✅     |
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+You now have a complete JWT-based auth system in NestJS, with the flexibility to protect or expose routes easily!
