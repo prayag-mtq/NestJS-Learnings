@@ -1,251 +1,245 @@
-# 🔐 NestJS Authentication (JWT) Guide
+# 🔐 NestJS Authorization Guide
 
-Authentication is a fundamental part of most applications. In this guide, you'll learn how to implement **username/password authentication** with **JWT support**, and how to **protect routes** using guards in NestJS.
+Authorization determines what an authenticated user is allowed to do. This README covers:
 
----
-
-## 📦 Installation
-
-```bash
-npm install --save @nestjs/jwt
-```
+* ✅ Basic Role-Based Access Control (RBAC)
+* ✅ Claims-based permissions
+* ✅ CASL integration for expressive, fine-grained authorization
+* ✅ Policy-based authorization with `@CheckPolicies`
 
 ---
 
-## 📁 File Structure
+## 📌 File Structure
 
 ```bash
 src/
 ├── auth/
-│   ├── auth.controller.ts      # Auth endpoints
-│   ├── auth.service.ts         # Auth logic
-│   ├── auth.module.ts          # Auth module
-│   ├── auth.guard.ts           # JWT guard
-│   ├── constants.ts            # JWT secret
-│   └── public.decorator.ts     # @Public() decorator
-├── users/
-│   ├── users.service.ts        # User lookup logic
-│   └── users.module.ts         # User module
+│   ├── auth.module.ts
+│   ├── auth.guard.ts         # AuthGuard to extract user from JWT
+│   └── roles.guard.ts        # RBAC guard
+├── common/
+│   ├── decorators/
+│   │   ├── roles.decorator.ts
+│   │   └── public.decorator.ts
+│   ├── enums/
+│   │   └── role.enum.ts
+├── casl/
+│   ├── casl.module.ts
+│   └── casl-ability.factory.ts
+└── policies/
+    ├── check-policies.decorator.ts
+    └── policies.guard.ts
 ```
 
 ---
 
-## 🚀 Setup Steps
+## 🔑 Role-Based Access Control (RBAC)
 
-### 1. Create Modules and Services
-
-```bash
-nest g module auth && nest g controller auth && nest g service auth
-nest g module users && nest g service users
-```
-
-### 2. `UsersService` (In-memory users)
+### 🎭 Define Roles
 
 ```ts
-// users/users.service.ts
-@Injectable()
-export class UsersService {
-  private readonly users = [
-    { userId: 1, username: 'john', password: 'changeme' },
-    { userId: 2, username: 'maria', password: 'guess' },
-  ];
-
-  async findOne(username: string) {
-    return this.users.find((user) => user.username === username);
-  }
+// enums/role.enum.ts
+export enum Role {
+  User = 'user',
+  Admin = 'admin',
 }
 ```
 
-### 3. `UsersModule`
+### 🧩 Create Decorator
 
 ```ts
-// users/users.module.ts
-@Module({
-  providers: [UsersService],
-  exports: [UsersService],
-})
-export class UsersModule {}
+// decorators/roles.decorator.ts
+import { SetMetadata } from '@nestjs/common';
+import { Role } from '../enums/role.enum';
+
+export const ROLES_KEY = 'roles';
+export const Roles = (...roles: Role[]) => SetMetadata(ROLES_KEY, roles);
 ```
 
----
-
-## 🛂 Authentication Logic
-
-### 4. AuthService
+### 🛡️ Roles Guard
 
 ```ts
-// auth/auth.service.ts
+// auth/roles.guard.ts
+import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ROLES_KEY } from '../common/decorators/roles.decorator';
+
 @Injectable()
-export class AuthService {
-  constructor(
-    private usersService: UsersService,
-    private jwtService: JwtService,
-  ) {}
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
 
-  async signIn(
-    username: string,
-    pass: string,
-  ): Promise<{ access_token: string }> {
-    const user = await this.usersService.findOne(username);
-    if (user?.password !== pass) {
-      throw new UnauthorizedException();
-    }
-    const payload = { sub: user.userId, username: user.username };
-    return {
-      access_token: await this.jwtService.signAsync(payload),
-    };
-  }
-}
-```
-
-### 5. AuthController
-
-```ts
-// auth/auth.controller.ts
-@Controller('auth')
-export class AuthController {
-  constructor(private authService: AuthService) {}
-
-  @HttpCode(HttpStatus.OK)
-  @Post('login')
-  signIn(@Body() body: { username: string; password: string }) {
-    return this.authService.signIn(body.username, body.password);
-  }
-
-  @UseGuards(AuthGuard)
-  @Get('profile')
-  getProfile(@Request() req) {
-    return req.user;
-  }
-}
-```
-
-### 6. JWT Constants
-
-```ts
-// auth/constants.ts
-export const jwtConstants = {
-  secret: 'SUPER_SECRET_KEY_DO_NOT_SHARE',
-};
-```
-
-### 7. Auth Module
-
-```ts
-// auth/auth.module.ts
-@Module({
-  imports: [
-    UsersModule,
-    JwtModule.register({
-      global: true,
-      secret: jwtConstants.secret,
-      signOptions: { expiresIn: '60s' },
-    }),
-  ],
-  controllers: [AuthController],
-  providers: [AuthService],
-  exports: [AuthService],
-})
-export class AuthModule {}
-```
-
----
-
-## 🔐 Protecting Routes
-
-### 8. Auth Guard
-
-```ts
-// auth/auth.guard.ts
-@Injectable()
-export class AuthGuard implements CanActivate {
-  constructor(
-    private jwtService: JwtService,
-    private reflector: Reflector,
-  ) {}
-
-  async canActivate(context: ExecutionContext): Promise<boolean> {
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+  canActivate(context: ExecutionContext): boolean {
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
-    if (isPublic) return true;
+    if (!requiredRoles) return true;
 
-    const request = context.switchToHttp().getRequest();
-    const token = this.extractTokenFromHeader(request);
-    if (!token) throw new UnauthorizedException();
-
-    try {
-      const payload = await this.jwtService.verifyAsync(token, {
-        secret: jwtConstants.secret,
-      });
-      request['user'] = payload;
-    } catch {
-      throw new UnauthorizedException();
-    }
-    return true;
-  }
-
-  private extractTokenFromHeader(request: Request): string | undefined {
-    const [type, token] = request.headers.authorization?.split(' ') ?? [];
-    return type === 'Bearer' ? token : undefined;
+    const { user } = context.switchToHttp().getRequest();
+    return requiredRoles.some(role => user.roles?.includes(role));
   }
 }
 ```
 
-### 9. Register Global Guard (optional)
+### 🧪 Usage
 
 ```ts
-// app.module.ts or auth.module.ts
-{
-  provide: APP_GUARD,
-  useClass: AuthGuard,
-}
-```
-
-### 10. Public Route Decorator
-
-```ts
-// auth/public.decorator.ts
-export const IS_PUBLIC_KEY = 'isPublic';
-export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
-```
-
-### 11. Use Public Decorator
-
-```ts
-@Public()
-@Get('health')
-healthCheck() {
-  return 'OK';
+@Roles(Role.Admin)
+@Post('create')
+createItem() {
+  // Only admin can access
 }
 ```
 
 ---
 
-## 🧪 Example cURL Usage
+## 🔐 Claims-Based Authorization
+
+Instead of roles, compare **permissions**:
+
+```ts
+@RequirePermissions(Permission.CREATE_ARTICLE)
+@Post('article')
+create() {}
+```
+
+> Use a similar `@RequirePermissions()` decorator and permission enum as in RBAC.
+
+---
+
+## 🦾 CASL Integration (Advanced)
+
+### 📦 Install CASL
 
 ```bash
-# Login
-curl -X POST http://localhost:3000/auth/login \
-  -d '{"username": "john", "password": "changeme"}' \
-  -H "Content-Type: application/json"
+npm install @casl/ability
+```
 
-# Use JWT for protected route
-curl http://localhost:3000/auth/profile \
-  -H "Authorization: Bearer <ACCESS_TOKEN>"
+### 🏗️ Define Abilities
+
+```ts
+// casl/casl-ability.factory.ts
+import { Injectable } from '@nestjs/common';
+import {
+  AbilityBuilder,
+  createMongoAbility,
+  MongoAbility,
+  InferSubjects,
+  ExtractSubjectType
+} from '@casl/ability';
+import { Action } from './action.enum';
+import { Article } from '../articles/article.entity';
+import { User } from '../users/user.entity';
+
+export type Subjects = InferSubjects<typeof Article | typeof User> | 'all';
+export type AppAbility = MongoAbility<[Action, Subjects]>;
+
+@Injectable()
+export class CaslAbilityFactory {
+  createForUser(user: User): AppAbility {
+    const { can, cannot, build } = new AbilityBuilder(createMongoAbility);
+
+    if (user.isAdmin) {
+      can(Action.Manage, 'all');
+    } else {
+      can(Action.Read, 'all');
+      can(Action.Update, Article, { authorId: user.id });
+      cannot(Action.Delete, Article, { isPublished: true });
+    }
+
+    return build({
+      detectSubjectType: item => item.constructor as ExtractSubjectType<Subjects>,
+    });
+  }
+}
+```
+
+### 📋 Action Enum
+
+```ts
+export enum Action {
+  Manage = 'manage',
+  Create = 'create',
+  Read = 'read',
+  Update = 'update',
+  Delete = 'delete',
+}
+```
+
+---
+
+## 🔄 Policies Guard (CASL-based)
+
+### 🎛️ Define Policy Decorator
+
+```ts
+// check-policies.decorator.ts
+import { SetMetadata } from '@nestjs/common';
+
+export const CHECK_POLICIES_KEY = 'check_policy';
+export const CheckPolicies = (...handlers: PolicyHandler[]) =>
+  SetMetadata(CHECK_POLICIES_KEY, handlers);
+```
+
+### 🛡️ Policies Guard
+
+```ts
+// policies.guard.ts
+@Injectable()
+export class PoliciesGuard implements CanActivate {
+  constructor(
+    private reflector: Reflector,
+    private caslAbilityFactory: CaslAbilityFactory
+  ) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const handlers =
+      this.reflector.get<PolicyHandler[]>(CHECK_POLICIES_KEY, context.getHandler()) || [];
+
+    const { user } = context.switchToHttp().getRequest();
+    const ability = this.caslAbilityFactory.createForUser(user);
+
+    return handlers.every(handler =>
+      typeof handler === 'function' ? handler(ability) : handler.handle(ability)
+    );
+  }
+}
+```
+
+### 🧪 Usage
+
+```ts
+@UseGuards(PoliciesGuard)
+@CheckPolicies((ability: AppAbility) => ability.can(Action.Read, Article))
+@Get('articles')
+findAll() {}
+```
+
+Or use a class:
+
+```ts
+export class ReadArticlePolicyHandler {
+  handle(ability: AppAbility) {
+    return ability.can(Action.Read, Article);
+  }
+}
+
+@UseGuards(PoliciesGuard)
+@CheckPolicies(new ReadArticlePolicyHandler())
+@Get('articles')
+findAll() {}
 ```
 
 ---
 
 ## ✅ Summary
 
-| Feature              | Status |
-| -------------------- | ------ |
-| JWT Authentication   | ✅     |
-| Guard-based Security | ✅     |
-| Public Route Support | ✅     |
-| Global Guard Option  | ✅     |
-| User Service (Mock)  | ✅     |
+| Method       | Guard           | Decorator               | Use Case                      |
+| ------------ | --------------- | ----------------------- | ----------------------------- |
+| RBAC         | `RolesGuard`    | `@Roles()`              | Role-based access             |
+| Claims-Based | CustomGuard     | `@RequirePermissions()` | Permission-based access       |
+| CASL         | `PoliciesGuard` | `@CheckPolicies()`      | Complex, attribute-based auth |
 
-You now have a complete JWT-based auth system in NestJS, with the flexibility to protect or expose routes easily!
+Use **authorization** to enforce security and control access to your API endpoints precisely and effectively.
+
+> ✅ Let me know if you want to add dynamic role loading, multi-tenant ACLs, or module-scoped permissions next!
