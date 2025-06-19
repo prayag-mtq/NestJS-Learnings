@@ -1,31 +1,167 @@
-# ⚡ NestJS Caching with `@nestjs/cache-manager`
+# 📘 NestJS Versioning Guide
 
-This README provides a comprehensive guide to implementing and customizing **caching** in a NestJS application using the `@nestjs/cache-manager` package. Includes setup, in-memory caching, TTL handling, interceptors, decorators, Redis integration, async configs, and more.
+Versioning in NestJS allows you to support multiple API versions simultaneously. This is crucial for applications that undergo breaking changes while still needing to support older versions.
 
----
-
-## 📘 Theory: Why Caching?
-
-Caching is a technique for storing frequently accessed data in a temporary storage layer to reduce recomputation and improve response time.
-
-### ✅ Benefits
-
-* Faster response times
-* Reduced database/API calls
-* Improved scalability and performance
+> ⚠️ This only applies to **HTTP-based applications**.
 
 ---
 
-## 📦 Installation
+## 🤔 Why Versioning?
 
-```bash
-npm install @nestjs/cache-manager cache-manager
+- Maintain **backward compatibility**
+- Enable smooth **transition for clients** to newer versions
+- Avoid breaking changes affecting existing consumers
+
+---
+
+## 🧩 Versioning Types
+
+| Type       | Description                                                    |
+| ---------- | -------------------------------------------------------------- |
+| URI        | Default. Adds version in URL path like `/v1/cats`              |
+| Header     | Uses a custom header (e.g., `Custom-Header: 1`)                |
+| Media Type | Version defined in `Accept` header like `application/json;v=2` |
+| Custom     | Uses custom logic to extract version from any request property |
+
+All types use the enum `VersioningType` from `@nestjs/common`.
+
+---
+
+## ⚙️ Enabling Versioning in `main.ts`
+
+### 📌 URI Versioning (Default)
+
+```ts
+app.enableVersioning({
+  type: VersioningType.URI,
+});
 ```
 
-To use **Redis**:
+Set a custom prefix or disable it:
 
-```bash
-npm install @keyv/redis
+```ts
+app.enableVersioning({
+  type: VersioningType.URI,
+  prefix: 'v', // or false to disable
+});
+```
+
+### 📌 Header Versioning
+
+```ts
+app.enableVersioning({
+  type: VersioningType.HEADER,
+  header: 'Custom-Header',
+});
+```
+
+### 📌 Media Type Versioning
+
+```ts
+app.enableVersioning({
+  type: VersioningType.MEDIA_TYPE,
+  key: 'v=', // Accept: application/json;v=2
+});
+```
+
+### 📌 Custom Versioning
+
+```ts
+const extractor = (req: Request): string[] =>
+  [req.headers['custom-version'] ?? '']
+    .flatMap((v) => v.split(','))
+    .filter(Boolean)
+    .sort()
+    .reverse();
+
+app.enableVersioning({
+  type: VersioningType.CUSTOM,
+  extractor,
+});
+```
+
+---
+
+## 🎯 Applying Versions
+
+### ✅ Versioned Controller
+
+```ts
+@Controller({ version: '1' })
+export class CatsControllerV1 {
+  @Get('cats')
+  findAll() {
+    return 'V1 cats';
+  }
+}
+```
+
+### ✅ Versioned Routes
+
+```ts
+@Controller()
+export class CatsController {
+  @Version('1')
+  @Get('cats')
+  findAllV1() {
+    return 'V1 cats';
+  }
+
+  @Version('2')
+  @Get('cats')
+  findAllV2() {
+    return 'V2 cats';
+  }
+}
+```
+
+### ✅ Multiple Versions
+
+```ts
+@Controller({ version: ['1', '2'] })
+export class CatsController {
+  @Get('cats')
+  findAll() {
+    return 'Available in V1 and V2';
+  }
+}
+```
+
+### ✅ Version Neutral
+
+```ts
+@Controller({ version: VERSION_NEUTRAL })
+export class NeutralController {
+  @Get('health')
+  check() {
+    return 'Accessible from any version';
+  }
+}
+```
+
+---
+
+## 🛠 Default Version
+
+```ts
+app.enableVersioning({
+  type: VersioningType.URI,
+  defaultVersion: '1', // Or VERSION_NEUTRAL or array ['1', '2']
+});
+```
+
+---
+
+## 🧱 Middleware Versioning
+
+Apply middleware only for specific versioned routes:
+
+```ts
+consumer.apply(LoggerMiddleware).forRoutes({
+  path: 'cats',
+  method: RequestMethod.GET,
+  version: '2',
+});
 ```
 
 ---
@@ -34,220 +170,43 @@ npm install @keyv/redis
 
 ```bash
 src/
-├── app.module.ts
-├── cache/
-│   ├── cache.config.ts         # Optional async config
-│   └── http-cache.interceptor.ts # Custom interceptor (optional)
-.env
+├── main.ts                # Enable versioning here
+├── cats/
+│   ├── cats.controller.ts # Versioned controllers and routes
+├── common/
+│   └── middleware/
+│       └── logger.middleware.ts # Middleware for versioned routes
 ```
 
 ---
 
-## 🚀 In-Memory Caching Setup
+## 🧪 Examples
 
-### ✅ Basic Setup
+### 🔍 URI Request Example
 
-```ts
-import { Module } from '@nestjs/common';
-import { CacheModule } from '@nestjs/cache-manager';
-import { AppController } from './app.controller';
-
-@Module({
-  imports: [CacheModule.register()],
-  controllers: [AppController],
-})
-export class AppModule {}
+```
+GET /v1/cats
+GET /v2/cats
 ```
 
----
+### 🔍 Header Version Request Example
 
-## 🔌 Interacting with the Cache
-
-### Inject `Cache` using the `CACHE_MANAGER` token
-
-```ts
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
-
-constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
+```
+GET /cats
+Custom-Header: 2
 ```
 
-### Common Methods
+### 🔍 Media Type Version Request Example
 
-```ts
-await this.cacheManager.set('key', 'value');           // Add item
-const value = await this.cacheManager.get('key');      // Retrieve item
-await this.cacheManager.set('key', 'value', 1000);     // TTL in ms
-await this.cacheManager.del('key');                    // Delete item
-await this.cacheManager.clear();                       // Clear all
+```
+GET /cats
+Accept: application/json;v=2
 ```
 
----
+### 🔍 Custom Versioning Request Example
 
-## 🧠 Auto-Caching with Interceptors
-
-### ✅ Per-Controller Caching
-
-```ts
-import { Controller, Get, UseInterceptors } from '@nestjs/common';
-import { CacheInterceptor } from '@nestjs/cache-manager';
-
-@Controller()
-@UseInterceptors(CacheInterceptor)
-export class AppController {
-  @Get()
-  findAll(): string[] {
-    return [];
-  }
-}
 ```
-
-### ✅ Global Caching
-
-```ts
-import { APP_INTERCEPTOR } from '@nestjs/core';
-
-@Module({
-  imports: [CacheModule.register()],
-  providers: [{
-    provide: APP_INTERCEPTOR,
-    useClass: CacheInterceptor,
-  }],
-})
-export class AppModule {}
+GET /cats
+custom-version: 3,2,1
 ```
-
----
-
-## 🕐 Time-to-Live (TTL)
-
-### ✅ Global TTL
-
-```ts
-CacheModule.register({ ttl: 5000 }); // 5 seconds
-```
-
-### ✅ Per-Key TTL
-
-```ts
-await this.cacheManager.set('key', 'value', 2000);
-```
-
-### ✅ Decorators
-
-```ts
-import { CacheKey, CacheTTL } from '@nestjs/cache-manager';
-
-@Controller()
-@CacheTTL(50) // Controller-wide TTL
-export class AppController {
-  @CacheKey('custom_key')
-  @CacheTTL(20) // Method-level TTL (overrides controller)
-  findAll(): string[] {
-    return [];
-  }
-}
-```
-
----
-
-## 🌐 Global Usage
-
-```ts
-CacheModule.register({ isGlobal: true });
-```
-
----
-
-## 📡 WebSockets / Microservices
-
-```ts
-@CacheKey('events')
-@CacheTTL(10)
-@UseInterceptors(CacheInterceptor)
-@SubscribeMessage('events')
-handleEvent(client: Client, data: string[]): Observable<string[]> {
-  return [];
-}
-```
-
----
-
-## 🧩 Customizing Cache Behavior
-
-### ✅ Custom Interceptor (track by header, etc.)
-
-```ts
-@Injectable()
-class HttpCacheInterceptor extends CacheInterceptor {
-  trackBy(context: ExecutionContext): string | undefined {
-    return 'custom_key';
-  }
-}
-```
-
----
-
-## 🔄 Switching to Redis
-
-```bash
-npm install @keyv/redis
-```
-
-### ✅ Multi-Store Setup
-
-```ts
-import { createKeyv } from '@keyv/redis';
-import { Keyv } from 'keyv';
-
-CacheModule.registerAsync({
-  useFactory: async () => ({
-    stores: [
-      new Keyv({ store: new CacheableMemory({ ttl: 60000 }) }),
-      createKeyv('redis://localhost:6379'),
-    ],
-  }),
-});
-```
-
----
-
-## ⏳ Async Configuration Options
-
-### ✅ With Factory Function
-
-```ts
-CacheModule.registerAsync({
-  imports: [ConfigModule],
-  useFactory: async (configService: ConfigService) => ({
-    ttl: configService.get('CACHE_TTL'),
-  }),
-  inject: [ConfigService],
-});
-```
-
-### ✅ With Class
-
-```ts
-@Injectable()
-class CacheConfigService implements CacheOptionsFactory {
-  createCacheOptions(): CacheModuleOptions {
-    return { ttl: 5 };
-  }
-}
-
-CacheModule.registerAsync({
-  useClass: CacheConfigService,
-});
-```
-
-### ✅ With useExisting
-
-```ts
-CacheModule.registerAsync({
-  imports: [ConfigModule],
-  useExisting: ConfigService,
-});
-```
-
 
