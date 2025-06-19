@@ -1,12 +1,19 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { ModuleRef } from '@nestjs/core';
+import { Model } from 'mongoose';
+import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { CreateCatDto } from './dto/create-cat.dto';
+import { Cat } from './db/cat.schema';
 
 @Injectable()
-export class CatsService implements OnModuleInit {
-  private catsFactory: CatsFactory;
-  constructor(private moduleRef: ModuleRef) {}
+export class CatsService {
+  constructor(@InjectModel(Cat.name) private catModel: Model<Cat>) {}
 
-  async onModuleInit() {
-    this.catsFactory = await this.moduleRef.create(CatsFactory);
+  async create(createCatDto: CreateCatDto): Promise<Cat> {
+    const createdCat = new this.catModel(createCatDto);
+    return createdCat.save();
+  }
+
+  async findAll(): Promise<Cat[]> {
+    return this.catModel.find().exec();
   }
 }

@@ -7,29 +7,19 @@ import {
 import { CatsController } from './cats.controller';
 import { CatsService } from './cats.service';
 import { loggerMiddleware } from './logger.middleware';
+import { Cat, CatSchema } from './db/cat.schema';
+import { MongooseModule } from '@nestjs/mongoose';
 
 @Module({
+  imports: [
+    MongooseModule.forFeature([
+      {
+        name: Cat.name,
+        schema: CatSchema,  
+      },
+    ]),
+  ],
   controllers: [CatsController],
   providers: [CatsService],
 })
-export class CatModule implements NestModule {
-  configure(consumer: MiddlewareConsumer) {
-    consumer
-      .apply(loggerMiddleware)
-      .forRoutes(
-        { path: 'cats', method: RequestMethod.GET },
-        { path: 'cats', method: RequestMethod.POST },
-        { path: 'dogs', method: RequestMethod.GET },
-      );
-
-    // // Wildcard Routing
-    // consumer
-    //   .apply(loggerMiddleware)
-    //   .forRoutes({ path: 'cats/*', method: RequestMethod.ALL });
-
-    // Multiple Middleware
-    
-    // consumer.apply(cors(), helmet(), logger).forRoutes(CatsController);
-
-  }
-}
+export class CatModule {}
