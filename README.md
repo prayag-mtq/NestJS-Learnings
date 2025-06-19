@@ -1,197 +1,149 @@
-## 🔒 Encryption and Hashing
+# 🚦 NestJS Rate Limiting Guide
 
-### 🔐 Encryption (AES-256-CTR)
+Rate limiting helps protect applications from brute-force attacks and request abuse.
 
-```ts
-// encryption.util.ts
-import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'crypto';
-import { promisify } from 'util';
+## 📦 Installation
 
-const iv = randomBytes(16);
-const password = 'Password used to generate key';
-
-const key = (await promisify(scrypt)(password, 'salt', 32)) as Buffer;
-
-const cipher = createCipheriv('aes-256-ctr', key, iv);
-const encryptedText = Buffer.concat([cipher.update('Nest'), cipher.final()]);
-
-const decipher = createDecipheriv('aes-256-ctr', key, iv);
-const decryptedText = Buffer.concat([
-  decipher.update(encryptedText),
-  decipher.final(),
-]);
+```bash
+npm install @nestjs/throttler
 ```
-
-> 📌 `crypto` is Node.js native. No extra dependency required.
 
 ---
 
-### 🧂 Hashing with bcrypt
+## ⚙️ Basic Configuration
 
-```bash
-npm i bcrypt
-npm i -D @types/bcrypt
-```
+Enable global throttling with default TTL (time to live in milliseconds) and request limit:
 
 ```ts
-// hashing.util.ts
-import { Injectable } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
+import { Module } from '@nestjs/common';
+import { ThrottlerModule } from '@nestjs/throttler';
 
-@Injectable()
-export class HashingService {
-  private readonly saltOrRounds = 10;
+@Module({
+  imports: [
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          ttl: 60000, // 1 minute
+          limit: 10, // Max 10 requests per minute
+        },
+      ],
+    }),
+  ],
+})
+export class AppModule {}
+```
 
-  async hashPassword(password: string): Promise<string> {
-    return bcrypt.hash(password, this.saltOrRounds);
-  }
+---
 
-  async comparePassword(password: string, hashed: string): Promise<boolean> {
-    return bcrypt.compare(password, hashed);
+## 🔐 Apply Throttling Globally
+
+Use the `APP_GUARD` to apply throttling across your entire app:
+
+```ts
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard } from '@nestjs/throttler';
+
+providers: [
+  {
+    provide: APP_GUARD,
+    useClass: ThrottlerGuard,
+  },
+];
+```
+
+---
+
+## 🎯 Use Per Route
+
+Override throttling for specific routes or controllers:
+
+```ts
+import { Throttle } from '@nestjs/throttler';
+
+@Throttle({ default: { limit: 5, ttl: 10000 } }) // 5 requests per 10 seconds
+@Get('custom')
+getCustom() {
+  return 'Custom throttled endpoint';
+}
+```
+
+---
+
+## 🚫 Skip Throttling
+
+Skip throttling for specific routes or controllers:
+
+```ts
+import { SkipThrottle } from '@nestjs/throttler';
+
+@SkipThrottle()
+@Get('open')
+getOpenEndpoint() {
+  return 'No throttling on this route';
+}
+```
+
+Partial skipping:
+
+```ts
+@SkipThrottle()
+@Controller('example')
+export class ExampleController {
+  // Will apply throttling
+  @SkipThrottle({ default: false })
+  @Get('secure')
+  secureRoute() {
+    return 'Throttled!';
   }
 }
 ```
 
-> 🔐 Hashing is **one-way**, unlike encryption.
+---
+
+## 🌐 Support for Proxies
+
+To trust proxy headers for real client IP:
+
+```ts
+app.set('trust proxy', 'loopback');
+```
+
+Custom proxy-aware tracker:
+
+```ts
+@Injectable()
+export class ThrottlerBehindProxyGuard extends ThrottlerGuard {
+  protected async getTracker(req: Record<string, any>): Promise<string> {
+    return req.ips?.[0] ?? req.ip;
+  }
+}
+```
 
 ---
 
-## 🛡️ Helmet - Secure HTTP Headers
-
-### ✅ Install
-
-```bash
-npm i helmet
-```
-
-### ⚙️ Apply in Main File (Express)
+## 🔄 Async Configuration (e.g. with ConfigService)
 
 ```ts
-// main.ts
-import helmet from 'helmet';
-
-app.use(helmet());
-```
-
-### 🚧 CSP for Apollo GraphQL
-
-```ts
-app.use(
-  helmet({
-    crossOriginEmbedderPolicy: false,
-    contentSecurityPolicy: {
-      directives: {
-        imgSrc: [
-          "'self'",
-          'data:',
-          'apollo-server-landing-page.cdn.apollographql.com',
-        ],
-        scriptSrc: ["'self'", 'https:', "'unsafe-inline'"],
-        manifestSrc: [
-          "'self'",
-          'apollo-server-landing-page.cdn.apollographql.com',
-        ],
-        frameSrc: ["'self'", 'sandbox.embed.apollographql.com'],
-      },
+ThrottlerModule.forRootAsync({
+  imports: [ConfigModule],
+  inject: [ConfigService],
+  useFactory: (config: ConfigService) => [
+    {
+      ttl: config.get('THROTTLE_TTL'),
+      limit: config.get('THROTTLE_LIMIT'),
     },
-  }),
-);
-```
-
----
-
-## 🌐 CORS - Cross-Origin Resource Sharing
-
-### ✅ Default Enable
-
-```ts
-const app = await NestFactory.create(AppModule);
-app.enableCors();
-```
-
-### 🛠️ With Config
-
-```ts
-app.enableCors({
-  origin: 'https://yourfrontend.com',
-  credentials: true,
-});
-```
-
-### 💡 Alternate Syntax
-
-```ts
-const app = await NestFactory.create(AppModule, {
-  cors: {
-    origin: ['https://frontend.com'],
-    credentials: true,
-  },
+  ],
 });
 ```
 
 ---
 
-## 🛡️ CSRF Protection
+## 📚 Helpers
 
-### 🧱 With Express
-
-```bash
-npm i csrf-csrf
-```
+Use time helpers for readable configs:
 
 ```ts
-// main.ts
-import { doubleCsrf } from 'csrf-csrf';
+import { seconds, minutes } from '@nestjs/throttler';
 
-const { doubleCsrfProtection } = doubleCsrf({
-  getSecret: () => 'a secret',
-  cookieName: 'x-csrf-token',
-  size: 64,
-});
-
-app.use(doubleCsrfProtection);
+ttl: minutes(1); // 60000
 ```
-
-> ⚠️ Requires `cookie-parser` or `session` middleware beforehand.
-
----
-
-### 🛡️ With Fastify
-
-```bash
-npm i @fastify/csrf-protection
-```
-
-```ts
-import fastifyCsrf from '@fastify/csrf-protection';
-
-await app.register(fastifyCsrf);
-```
-
-> ⚠️ Requires compatible session or storage plugin.
-
----
-
-## 📁 File Placement Recommendations
-
-```bash
-src/
-├── security/
-│   ├── encryption.util.ts        # AES encryption helpers
-│   ├── hashing.util.ts           # bcrypt helpers
-│   ├── helmet.config.ts          # Helmet setup (optional)
-│   ├── cors.config.ts            # CORS setup
-│   └── csrf.config.ts            # CSRF protection logic
-```
-
----
-
-## 🧪 Usage Summary
-
-| Feature    | File                 | Purpose                          |
-| ---------- | -------------------- | -------------------------------- |
-| Encryption | `encryption.util.ts` | Reversible data protection       |
-| Hashing    | `hashing.util.ts`    | One-way password hashing         |
-| Helmet     | `helmet.config.ts`   | Sets HTTP security headers       |
-| CORS       | `cors.config.ts`     | Enables cross-origin requests    |
-| CSRF       | `csrf.config.ts`     | Prevents forged browser requests |
