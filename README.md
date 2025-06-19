@@ -1,34 +1,32 @@
-# 🧩 NestJS Configuration with @nestjs/config
+# ⚡ NestJS Caching with `@nestjs/cache-manager`
 
-This guide provides **a complete walkthrough** of handling environment-based configuration in NestJS using `@nestjs/config`. It includes `.env` management, config files, YAML, validation, conditional modules, and more — both theory and practical code.
+This README provides a comprehensive guide to implementing and customizing **caching** in a NestJS application using the `@nestjs/cache-manager` package. Includes setup, in-memory caching, TTL handling, interceptors, decorators, Redis integration, async configs, and more.
 
 ---
 
-## 📘 Theory
+## 📘 Theory: Why Caching?
 
-### ✅ Why Configuration Matters
+Caching is a technique for storing frequently accessed data in a temporary storage layer to reduce recomputation and improve response time.
 
-Applications behave differently based on the environment (e.g., dev, staging, prod). Using config:
+### ✅ Benefits
 
-* Keeps secrets and credentials out of code.
-* Enables dynamic behavior based on environment.
-* Makes apps portable, predictable, and easier to test.
+* Faster response times
+* Reduced database/API calls
+* Improved scalability and performance
 
-### ✅ process.env & .env
+---
 
-* Node.js allows access to environment variables via `process.env`.
-* The `.env` file is a simple key-value format (e.g., `DB_HOST=localhost`).
-* Best practice is to avoid hardcoding values in source files and instead rely on environment variables.
+## 📦 Installation
 
-### ✅ Why @nestjs/config
+```bash
+npm install @nestjs/cache-manager cache-manager
+```
 
-NestJS provides the `@nestjs/config` package which:
+To use **Redis**:
 
-* Automatically loads `.env` files.
-* Uses `dotenv` and `dotenv-expand` under the hood.
-* Supports schema validation (with `Joi` or `class-validator`).
-* Allows modular, typed, nested config access.
-* Supports conditional module loading.
+```bash
+npm install @keyv/redis
+```
 
 ---
 
@@ -37,299 +35,219 @@ NestJS provides the `@nestjs/config` package which:
 ```bash
 src/
 ├── app.module.ts
-├── main.ts
-├── config/
-│   ├── configuration.ts           # JS object config
-│   ├── database.config.ts         # Namespaced config
-│   ├── config.yaml                # YAML config
-│   └── env.validation.ts          # Validation logic
+├── cache/
+│   ├── cache.config.ts         # Optional async config
+│   └── http-cache.interceptor.ts # Custom interceptor (optional)
 .env
-.env.development
-nest-cli.json                      # Ensure YAML files copied to dist
 ```
 
 ---
 
-## 🧩 Setup Instructions
+## 🚀 In-Memory Caching Setup
 
-### 🔌 Install Dependencies
-
-```bash
-npm i --save @nestjs/config
-npm i js-yaml
-npm i joi class-validator class-transformer
-npm i -D @types/js-yaml
-```
-
-### ⚙️ Enable Config in AppModule
+### ✅ Basic Setup
 
 ```ts
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import configuration from './config/configuration';
-import databaseConfig from './config/database.config';
-import { validate } from './config/env.validation';
+import { CacheModule } from '@nestjs/cache-manager';
+import { AppController } from './app.controller';
 
 @Module({
-  imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: ['.env.development.local', '.env.development'],
-      load: [configuration, databaseConfig],
-      validationSchema: Joi.object({
-        NODE_ENV: Joi.string().valid('development', 'production').default('development'),
-        PORT: Joi.number().port().default(3000),
-      }),
-      validationOptions: {
-        allowUnknown: false,
-        abortEarly: true,
-      },
-      expandVariables: true,
-      cache: true,
-      validate,
-    }),
-  ],
+  imports: [CacheModule.register()],
+  controllers: [AppController],
 })
 export class AppModule {}
 ```
 
 ---
 
-## 🔐 .env Example
+## 🔌 Interacting with the Cache
 
-```env
-NODE_ENV=development
-PORT=3000
-APP_URL=mywebsite.com
-SUPPORT_EMAIL=support@${APP_URL}
-DATABASE_HOST=localhost
-DATABASE_PORT=5432
+### Inject `Cache` using the `CACHE_MANAGER` token
+
+```ts
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
+
+constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
+```
+
+### Common Methods
+
+```ts
+await this.cacheManager.set('key', 'value');           // Add item
+const value = await this.cacheManager.get('key');      // Retrieve item
+await this.cacheManager.set('key', 'value', 1000);     // TTL in ms
+await this.cacheManager.del('key');                    // Delete item
+await this.cacheManager.clear();                       // Clear all
 ```
 
 ---
 
-## 🔧 Custom Configuration File
+## 🧠 Auto-Caching with Interceptors
 
-### `configuration.ts`
+### ✅ Per-Controller Caching
 
 ```ts
-export default () => ({
-  port: parseInt(process.env.PORT, 10) || 3000,
-  database: {
-    host: process.env.DATABASE_HOST,
-    port: parseInt(process.env.DATABASE_PORT, 10) || 5432,
-  },
-});
+import { Controller, Get, UseInterceptors } from '@nestjs/common';
+import { CacheInterceptor } from '@nestjs/cache-manager';
+
+@Controller()
+@UseInterceptors(CacheInterceptor)
+export class AppController {
+  @Get()
+  findAll(): string[] {
+    return [];
+  }
+}
 ```
 
-* Groups config logically.
-* Supports nested access via `configService.get('database.port')`.
-
----
-
-## 🧱 Namespaced Config
-
-### `database.config.ts`
+### ✅ Global Caching
 
 ```ts
-import { registerAs } from '@nestjs/config';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 
-export default registerAs('database', () => ({
-  host: process.env.DATABASE_HOST,
-  port: parseInt(process.env.DATABASE_PORT, 10) || 5432,
-}));
-```
-
-### Usage:
-
-```ts
-const host = configService.get<string>('database.host');
-```
-
-Or inject with strong typing:
-
-```ts
-constructor(
-  @Inject(databaseConfig.KEY)
-  private readonly dbConfig: ConfigType<typeof databaseConfig>,
-) {}
+@Module({
+  imports: [CacheModule.register()],
+  providers: [{
+    provide: APP_INTERCEPTOR,
+    useClass: CacheInterceptor,
+  }],
+})
+export class AppModule {}
 ```
 
 ---
 
-## 📑 YAML Configuration Support
+## 🕐 Time-to-Live (TTL)
 
-### `config.yaml`
-
-```yaml
-http:
-  host: localhost
-  port: 8080
-```
-
-### `configuration.ts` for YAML
+### ✅ Global TTL
 
 ```ts
-import { readFileSync } from 'fs';
-import * as yaml from 'js-yaml';
-import { join } from 'path';
-
-export default () => {
-  return yaml.load(
-    readFileSync(join(__dirname, 'config.yaml'), 'utf8'),
-  ) as Record<string, any>;
-};
+CacheModule.register({ ttl: 5000 }); // 5 seconds
 ```
 
-### `nest-cli.json`
+### ✅ Per-Key TTL
 
-```json
-{
-  "compilerOptions": {
-    "assets": [
-      {
-        "include": "src/config/*.yaml",
-        "outDir": "dist/config"
-      }
-    ]
+```ts
+await this.cacheManager.set('key', 'value', 2000);
+```
+
+### ✅ Decorators
+
+```ts
+import { CacheKey, CacheTTL } from '@nestjs/cache-manager';
+
+@Controller()
+@CacheTTL(50) // Controller-wide TTL
+export class AppController {
+  @CacheKey('custom_key')
+  @CacheTTL(20) // Method-level TTL (overrides controller)
+  findAll(): string[] {
+    return [];
   }
 }
 ```
 
 ---
 
-## 🧪 Validation
-
-### ✅ Joi Schema
+## 🌐 Global Usage
 
 ```ts
-validationSchema: Joi.object({
-  PORT: Joi.number().port().required(),
-  NODE_ENV: Joi.string().valid('development', 'production'),
-})
+CacheModule.register({ isGlobal: true });
 ```
 
-### ✅ class-validator Method
+---
+
+## 📡 WebSockets / Microservices
 
 ```ts
-export class EnvVars {
-  @IsEnum(['development', 'production'])
-  NODE_ENV: string;
-
-  @IsNumber()
-  @Min(1000)
-  @Max(65535)
-  PORT: number;
-}
-```
-
-```ts
-export function validate(config: Record<string, unknown>) {
-  const validated = plainToInstance(EnvVars, config, {
-    enableImplicitConversion: true,
-  });
-  const errors = validateSync(validated, { skipMissingProperties: false });
-  if (errors.length > 0) throw new Error(errors.toString());
-  return validated;
+@CacheKey('events')
+@CacheTTL(10)
+@UseInterceptors(CacheInterceptor)
+@SubscribeMessage('events')
+handleEvent(client: Client, data: string[]): Observable<string[]> {
+  return [];
 }
 ```
 
 ---
 
-## 🧠 Advanced Features
+## 🧩 Customizing Cache Behavior
 
-### 🧠 Expandable Variables
-
-```env
-APP_URL=domain.com
-SUPPORT_EMAIL=support@${APP_URL}
-```
-
-Enabled via `expandVariables: true`.
-
----
-
-### ⚙️ Conditional Modules
-
-```ts
-import { ConditionalModule } from '@nestjs/config';
-
-@Module({
-  imports: [
-    ConfigModule.forRoot(),
-    ConditionalModule.registerWhen(
-      FooModule,
-      (env) => env['USE_FOO'] === 'true'
-    ),
-  ],
-})
-```
-
----
-
-### 🧩 Partial Config with `forFeature()`
-
-```ts
-@Module({
-  imports: [ConfigModule.forFeature(databaseConfig)],
-})
-export class DatabaseModule {}
-```
-
-Use `onModuleInit()` if values aren't available in constructor.
-
----
-
-## 🎯 Usage in Code
-
-### Inject ConfigService
+### ✅ Custom Interceptor (track by header, etc.)
 
 ```ts
 @Injectable()
-export class SomeService {
-  constructor(private configService: ConfigService) {}
-
-  get port() {
-    return this.configService.get<number>('PORT');
-  }
-
-  get dbHost() {
-    return this.configService.get<string>('database.host', 'localhost');
+class HttpCacheInterceptor extends CacheInterceptor {
+  trackBy(context: ExecutionContext): string | undefined {
+    return 'custom_key';
   }
 }
 ```
 
 ---
 
-## 🚀 Usage in `main.ts`
-
-```ts
-async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  const config = app.get(ConfigService);
-  const port = config.get<number>('PORT');
-  await app.listen(port);
-}
-bootstrap();
-```
-
----
-
-## 🧪 Testing
-
-Mock the environment in `.env.test`, or override in CI with `export VAR=value`.
+## 🔄 Switching to Redis
 
 ```bash
-NODE_ENV=test PORT=4000 nest start
+npm install @keyv/redis
+```
+
+### ✅ Multi-Store Setup
+
+```ts
+import { createKeyv } from '@keyv/redis';
+import { Keyv } from 'keyv';
+
+CacheModule.registerAsync({
+  useFactory: async () => ({
+    stores: [
+      new Keyv({ store: new CacheableMemory({ ttl: 60000 }) }),
+      createKeyv('redis://localhost:6379'),
+    ],
+  }),
+});
 ```
 
 ---
 
-## 🧷 Best Practices
+## ⏳ Async Configuration Options
 
-* ✅ Validate all required variables
-* ✅ Separate environments (`.env.production`, `.env.development`)
-* ✅ Use namespaces for modular config
-* ✅ Load only what is needed using `forFeature()`
-* ✅ Avoid direct access to `process.env` outside config files
+### ✅ With Factory Function
+
+```ts
+CacheModule.registerAsync({
+  imports: [ConfigModule],
+  useFactory: async (configService: ConfigService) => ({
+    ttl: configService.get('CACHE_TTL'),
+  }),
+  inject: [ConfigService],
+});
+```
+
+### ✅ With Class
+
+```ts
+@Injectable()
+class CacheConfigService implements CacheOptionsFactory {
+  createCacheOptions(): CacheModuleOptions {
+    return { ttl: 5 };
+  }
+}
+
+CacheModule.registerAsync({
+  useClass: CacheConfigService,
+});
+```
+
+### ✅ With useExisting
+
+```ts
+CacheModule.registerAsync({
+  imports: [ConfigModule],
+  useExisting: ConfigService,
+});
+```
+
 
