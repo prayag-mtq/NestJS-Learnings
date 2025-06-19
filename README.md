@@ -1,129 +1,155 @@
-# 🔁 Circular Dependencies in NestJS
 
-In NestJS, a **circular dependency** occurs when **two or more providers or modules depend on each other**, forming a loop. This can cause NestJS to fail to resolve dependencies during application startup.
+# 📘 ModuleRef in NestJS
 
-## 🚨 What is a Circular Dependency?
+NestJS provides the `ModuleRef` class to:
 
-A circular dependency is when:
-
-- `ServiceA` depends on `ServiceB`
-- and `ServiceB` also depends on `ServiceA`
-
-This creates a loop, and NestJS cannot determine which class to instantiate first unless explicitly guided.
+* Dynamically **access providers** registered in the DI container.
+* **Resolve request-scoped or transient** providers on demand.
+* **Create custom class instances** dynamically.
+* **Register request context** for custom-scoped providers.
 
 ---
 
-## ✅ Solutions to Resolve Circular Dependencies
+## 📁 File Structure
 
-NestJS provides **two main techniques** to break this loop:
-
----
-
-### 1️⃣ `forwardRef()` — Lazy Reference Resolution
-
-Use the `forwardRef()` utility function when injecting dependencies to inform NestJS that the actual provider will be available later.
-
-#### 🛠 Example
-
-```ts
-// cats.service.ts
-@Injectable()
-export class CatsService {
-  constructor(
-    @Inject(forwardRef(() => CommonService))
-    private commonService: CommonService,
-  ) {}
-}
-
-// common.service.ts
-@Injectable()
-export class CommonService {
-  constructor(
-    @Inject(forwardRef(() => CatsService))
-    private catsService: CatsService,
-  ) {}
-}
+```
+src/
+│
+├── cats/
+│   ├── cats.service.ts           ← Uses ModuleRef to resolve providers
+│   ├── cats.repository.ts        ← Example repository (can be request-scoped)
+│   └── cats.factory.ts           ← Example factory class created dynamically
+│
+├── shared/
+│   └── transient.service.ts      ← Transient scoped service to demonstrate resolution
+│
+└── main.ts                       ← Can be used for request simulation if needed
 ```
 
-> ✅ **Import `forwardRef` from `@nestjs/common`**
-
-> ⚠️ **Note**: Avoid relying on constructor execution order — it's undefined in circular setups.
-
 ---
 
-### 2️⃣ `ModuleRef` — Programmatic Lookup
+## 📌 Where and What to Add
 
-Instead of injecting the dependency directly, use `ModuleRef` to **manually retrieve it at runtime**, typically during the `onModuleInit()` lifecycle hook.
-
-#### 🛠 Example
+### 1. `cats.service.ts` – Uses `ModuleRef` for various use cases
 
 ```ts
-@Injectable()
+// src/cats/cats.service.ts
+import {
+  Injectable,
+  OnModuleInit,
+  Scope,
+  Inject,
+} from '@nestjs/common';
+import { ModuleRef, ContextIdFactory, REQUEST } from '@nestjs/core';
+import { CatsRepository } from './cats.repository';
+import { TransientService } from '../shared/transient.service';
+import { CatsFactory } from './cats.factory';
+
+@Injectable({ scope: Scope.REQUEST })
 export class CatsService implements OnModuleInit {
-  private commonService: CommonService;
+  constructor(
+    private moduleRef: ModuleRef,
+    @Inject(REQUEST) private readonly request: Record<string, any>, // For request context
+  ) {}
 
-  constructor(private moduleRef: ModuleRef) {}
+  async onModuleInit() {
+    // 1. Static Resolution
+    const staticService = this.moduleRef.get(TransientService, { strict: false });
 
-  onModuleInit() {
-    this.commonService = this.moduleRef.get(CommonService, { strict: false });
+    // 2. Transient Resolution (creates NEW instance every call)
+    const t1 = await this.moduleRef.resolve(TransientService);
+    const t2 = await this.moduleRef.resolve(TransientService);
+    console.log('Are t1 and t2 equal?', t1 === t2); // false
+
+    // 3. Transient resolution with context (same instance)
+    const contextId = ContextIdFactory.getByRequest(this.request);
+    const ts1 = await this.moduleRef.resolve(TransientService, contextId);
+    const ts2 = await this.moduleRef.resolve(TransientService, contextId);
+    console.log('Same instance with context?', ts1 === ts2); // true
+
+    // 4. Request-scoped provider resolution
+    const catsRepo = await this.moduleRef.resolve(CatsRepository, contextId);
+
+    // 5. Dynamically instantiate a class not in providers
+    const catsFactory = await this.moduleRef.create(CatsFactory);
+    catsFactory.log(); // Output from dynamic factory
   }
 }
 ```
 
-> ✅ Use when one side of the circular dependency is optional or delayed
-
 ---
 
-## 🔁 Circular Dependencies Between Modules
-
-Use `forwardRef()` in the `imports` array of `@Module()` to resolve circular module imports.
-
-#### 🛠 Example
+### 2. `cats.repository.ts` – Request-scoped provider
 
 ```ts
-// common.module.ts
-@Module({
-  imports: [forwardRef(() => CatsModule)],
-  providers: [CommonService],
-  exports: [CommonService],
-})
-export class CommonModule {}
+// src/cats/cats.repository.ts
+import { Injectable, Scope } from '@nestjs/common';
 
-// cats.module.ts
-@Module({
-  imports: [forwardRef(() => CommonModule)],
-  providers: [CatsService],
-})
-export class CatsModule {}
-```
-
-> ✅ Remember to export the providers if they are used outside their own module.
-
----
-
-## ⚠️ Barrel File Warning
-
-Avoid using `index.ts` ("barrel files") for importing providers or modules **within the same directory** as they can **accidentally reintroduce circular dependencies**.
-
-#### ❌ Bad Example:
-
-```ts
-// Avoid this:
-import { CatsService } from './cats';
-```
-
-#### ✅ Use this instead:
-
-```ts
-import { CatsService } from './cats.service';
+@Injectable({ scope: Scope.REQUEST })
+export class CatsRepository {
+  getData() {
+    return 'Repo data';
+  }
+}
 ```
 
 ---
 
-## 📌 Summary
+### 3. `transient.service.ts` – Transient-scoped provider
 
-| Technique            | When to Use                                                 |
-| -------------------- | ----------------------------------------------------------- |
-| `forwardRef()`       | When two providers or modules directly depend on each other |
-| `ModuleRef`          | When you can delay or conditionally inject a dependency     |
-| `Avoid barrel files` | To prevent unintentional import loops                       |
+```ts
+// src/shared/transient.service.ts
+import { Injectable, Scope } from '@nestjs/common';
+
+@Injectable({ scope: Scope.TRANSIENT })
+export class TransientService {
+  id = Math.random();
+}
+```
+
+---
+
+### 4. `cats.factory.ts` – Custom class not registered as a provider
+
+```ts
+// src/cats/cats.factory.ts
+export class CatsFactory {
+  log() {
+    console.log('🐱 CatsFactory created dynamically');
+  }
+}
+```
+
+---
+
+## 🧪 Example Usage Summary
+
+| Scenario                       | Method                      | Description                                     |
+| ------------------------------ | --------------------------- | ----------------------------------------------- |
+| Static provider                | `get()`                     | Resolves a singleton-scoped provider            |
+| Transient provider             | `resolve()`                 | Returns new instance per call                   |
+| Scoped provider (same request) | `resolve(token, contextId)` | Shares instance across services for one request |
+| Custom class instantiation     | `create()`                  | Instantiates class not declared as provider     |
+
+---
+
+## 🎯 When to Use
+
+| Use Case                                   | Tool                                     |
+| ------------------------------------------ | ---------------------------------------- |
+| Access existing provider dynamically       | `moduleRef.get()`                        |
+| Resolve scoped or transient provider       | `moduleRef.resolve()`                    |
+| Inject same scoped provider within request | `ContextIdFactory.getByRequest()`        |
+| Inject provider from another module        | `get(token, { strict: false })`          |
+| Instantiate custom classes                 | `moduleRef.create()`                     |
+| Register custom request context            | `moduleRef.registerRequestByContextId()` |
+
+---
+
+## ⚠️ Notes
+
+* **Avoid using `get()` for transient/request-scoped** providers – use `resolve()` instead.
+* Make sure to **inject `REQUEST`** if using context-aware resolution.
+* `ContextIdFactory.create()` is for **manual DI trees**; not auto-managed by Nest.
+* Don't forget to **register providers** like `TransientService`, `CatsRepository` in a module.
+

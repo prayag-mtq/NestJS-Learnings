@@ -1,15 +1,12 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { CatInterface } from 'src/interface/cat.interface';
-import { CommonService } from './../circular-services/common.service';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 
 @Injectable()
 export class CatsService implements OnModuleInit {
-  private common: CommonService;
+  private catsFactory: CatsFactory;
   constructor(private moduleRef: ModuleRef) {}
-  onModuleInit() {
-    this.common = this.moduleRef.get(CommonService, {
-      strict: false,
-    });
+
+  async onModuleInit() {
+    this.catsFactory = await this.moduleRef.create(CatsFactory);
   }
 }
