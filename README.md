@@ -1,214 +1,129 @@
-**Injection Scopes**
-\\\\  
-### 🔍 What is Injection Scope?
+# 🔁 Circular Dependencies in NestJS
 
-In NestJS, the **injection scope** determines **how long a provider's instance lives** and **who shares it**. This allows better control over **resource usage**, **performance**, and **request handling** in your application.
+In NestJS, a **circular dependency** occurs when **two or more providers or modules depend on each other**, forming a loop. This can cause NestJS to fail to resolve dependencies during application startup.
 
-NestJS offers **three core scopes**:
+## 🚨 What is a Circular Dependency?
 
-| Scope       | Description                                                            | Use Case                                  |
-| ----------- | ---------------------------------------------------------------------- | ----------------------------------------- |
-| `SINGLETON` | Default. One instance shared across the whole app.                     | Most services, database connections       |
-| `REQUEST`   | New instance created **per incoming request**.                         | Per-request data, user-specific caching   |
-| `TRANSIENT` | New instance created **per injection** (even within the same request). | Stateless helpers, isolated logging, etc. |
+A circular dependency is when:
 
----
+- `ServiceA` depends on `ServiceB`
+- and `ServiceB` also depends on `ServiceA`
 
-## 🧠 How Scope Affects NestJS Providers
-
-* Nest uses **singleton** scope by default for performance and consistency.
-* Node.js is single-threaded and event-driven, so it's safe to share instances unless explicitly required.
-* If a `REQUEST` scoped provider is used in a controller, that controller becomes request-scoped too.
+This creates a loop, and NestJS cannot determine which class to instantiate first unless explicitly guided.
 
 ---
 
-### 📦 Usage Example: Setting Scope
+## ✅ Solutions to Resolve Circular Dependencies
+
+NestJS provides **two main techniques** to break this loop:
+
+---
+
+### 1️⃣ `forwardRef()` — Lazy Reference Resolution
+
+Use the `forwardRef()` utility function when injecting dependencies to inform NestJS that the actual provider will be available later.
+
+#### 🛠 Example
 
 ```ts
-// Import the Scope enum
-import { Injectable, Scope } from '@nestjs/common';
+// cats.service.ts
+@Injectable()
+export class CatsService {
+  constructor(
+    @Inject(forwardRef(() => CommonService))
+    private commonService: CommonService,
+  ) {}
+}
 
-@Injectable({ scope: Scope.REQUEST })
-export class MyRequestScopedService {}
-```
-
-For custom providers:
-
-```ts
-{
-  provide: 'MY_PROVIDER',
-  useClass: MyClass,
-  scope: Scope.TRANSIENT,
+// common.service.ts
+@Injectable()
+export class CommonService {
+  constructor(
+    @Inject(forwardRef(() => CatsService))
+    private catsService: CatsService,
+  ) {}
 }
 ```
 
+> ✅ **Import `forwardRef` from `@nestjs/common`**
+
+> ⚠️ **Note**: Avoid relying on constructor execution order — it's undefined in circular setups.
+
 ---
 
-## 🔄 Scope Behavior Examples
+### 2️⃣ `ModuleRef` — Programmatic Lookup
 
-### ✅ Default (Singleton) Scope
+Instead of injecting the dependency directly, use `ModuleRef` to **manually retrieve it at runtime**, typically during the `onModuleInit()` lifecycle hook.
+
+#### 🛠 Example
 
 ```ts
 @Injectable()
-export class AppService {
-  private readonly id = Math.random();
-  getId() {
-    return this.id;
+export class CatsService implements OnModuleInit {
+  private commonService: CommonService;
+
+  constructor(private moduleRef: ModuleRef) {}
+
+  onModuleInit() {
+    this.commonService = this.moduleRef.get(CommonService, { strict: false });
   }
 }
 ```
 
-**Same ID** on every request.
+> ✅ Use when one side of the circular dependency is optional or delayed
 
 ---
 
-### 🔁 Request Scope
+## 🔁 Circular Dependencies Between Modules
+
+Use `forwardRef()` in the `imports` array of `@Module()` to resolve circular module imports.
+
+#### 🛠 Example
 
 ```ts
-@Injectable({ scope: Scope.REQUEST })
-export class UserContextService {
-  constructor(@Inject(REQUEST) private request: Request) {}
+// common.module.ts
+@Module({
+  imports: [forwardRef(() => CatsModule)],
+  providers: [CommonService],
+  exports: [CommonService],
+})
+export class CommonModule {}
 
-  getCurrentUser() {
-    return this.request.user;
-  }
-}
+// cats.module.ts
+@Module({
+  imports: [forwardRef(() => CommonModule)],
+  providers: [CatsService],
+})
+export class CatsModule {}
 ```
 
-* **Different instance per request**
-* Great for GraphQL multi-tenancy or per-user logging.
+> ✅ Remember to export the providers if they are used outside their own module.
 
 ---
 
-### 💥 Transient Scope
+## ⚠️ Barrel File Warning
+
+Avoid using `index.ts` ("barrel files") for importing providers or modules **within the same directory** as they can **accidentally reintroduce circular dependencies**.
+
+#### ❌ Bad Example:
 
 ```ts
-@Injectable({ scope: Scope.TRANSIENT })
-export class LoggerService {
-  log(message: string) {
-    console.log(`[Logger ${Math.random()}] ${message}`);
-  }
-}
+// Avoid this:
+import { CatsService } from './cats';
 ```
 
-**New instance per injection**, even within a single request.
-
----
-
-## 🔐 Request Scope in Controllers
+#### ✅ Use this instead:
 
 ```ts
-import { Controller, Scope } from '@nestjs/common';
-
-@Controller({ path: 'users', scope: Scope.REQUEST })
-export class UsersController {
-  constructor(private readonly userService: UserService) {}
-}
-```
-
-If the controller depends on a `REQUEST` scoped provider, it will also become request-scoped.
-
----
-
-## ⚙️ Using REQUEST or CONTEXT Object
-
-### 🧾 In Express/Fastify apps:
-
-```ts
-@Injectable({ scope: Scope.REQUEST })
-export class CatsService {
-  constructor(@Inject(REQUEST) private readonly req: Request) {}
-
-  getHeaders() {
-    return this.req.headers;
-  }
-}
-```
-
-### 🔬 In GraphQL apps:
-
-```ts
-@Injectable({ scope: Scope.REQUEST })
-export class CatsService {
-  constructor(@Inject(CONTEXT) private readonly context) {}
-
-  getTenantId() {
-    return this.context.req.headers['x-tenant-id'];
-  }
-}
+import { CatsService } from './cats.service';
 ```
 
 ---
 
-## 🔄 Durable Providers (Advanced Multi-Tenancy)
+## 📌 Summary
 
-Durable providers are `REQUEST` scoped providers **reused across multiple requests**, based on **shared attributes**, such as tenant ID.
-
-### 📍 Setup
-
-1. Create a custom **ContextIdStrategy**:
-
-```ts
-import {
-  ContextId,
-  ContextIdFactory,
-  ContextIdStrategy,
-  HostComponentInfo,
-} from '@nestjs/core';
-import { Request } from 'express';
-
-const tenants = new Map<string, ContextId>();
-
-export class TenantStrategy implements ContextIdStrategy {
-  attach(contextId: ContextId, request: Request) {
-    const tenantId = request.headers['x-tenant-id'] as string;
-    let tenantCtxId = tenants.get(tenantId);
-
-    if (!tenantCtxId) {
-      tenantCtxId = ContextIdFactory.create();
-      tenants.set(tenantId, tenantCtxId);
-    }
-
-    return (info: HostComponentInfo) =>
-      info.isTreeDurable ? tenantCtxId : contextId;
-  }
-}
-```
-
-2. Register the strategy in `main.ts`:
-
-```ts
-import { ContextIdFactory } from '@nestjs/core';
-import { TenantStrategy } from './tenant.strategy';
-
-async function bootstrap() {
-  ContextIdFactory.apply(new TenantStrategy());
-  const app = await NestFactory.create(AppModule);
-  await app.listen(3000);
-}
-```
-
-3. Mark providers as **durable**:
-
-```ts
-@Injectable({ scope: Scope.REQUEST, durable: true })
-export class CatsService {}
-```
-
----
-
-## 🧩 Example: Using `INQUIRER` token (for logging who injected a service)
-
-```ts
-import { Inject, Injectable, Scope } from '@nestjs/common';
-import { INQUIRER } from '@nestjs/core';
-
-@Injectable({ scope: Scope.TRANSIENT })
-export class LoggerService {
-  constructor(@Inject(INQUIRER) private parent: object) {}
-
-  log(msg: string) {
-    console.log(`[${this.parent?.constructor?.name}] ${msg}`);
-  }
-}
-```
+| Technique            | When to Use                                                 |
+| -------------------- | ----------------------------------------------------------- |
+| `forwardRef()`       | When two providers or modules directly depend on each other |
+| `ModuleRef`          | When you can delay or conditionally inject a dependency     |
+| `Avoid barrel files` | To prevent unintentional import loops                       |
