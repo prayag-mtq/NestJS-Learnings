@@ -1,149 +1,251 @@
-# 🚦 NestJS Rate Limiting Guide
+# 🚀 NestJS CLI & Libraries: Comprehensive Guide
+---
 
-Rate limiting helps protect applications from brute-force attacks and request abuse.
-
-## 📦 Installation
+## 📁 File Structure
 
 ```bash
-npm install @nestjs/throttler
+project-root/
+├── apps/                     # Application-type projects (in monorepo)
+├── libs/                     # Nest libraries (reusable modules)
+├── node_modules/
+├── package.json
+├── nest-cli.json             # CLI config with project references
+├── tsconfig.json             # Root tsconfig
+└── ...
 ```
 
 ---
 
-## ⚙️ Basic Configuration
+## 🛠️ CLI Installation
 
-Enable global throttling with default TTL (time to live in milliseconds) and request limit:
+```bash
+npm install -g @nestjs/cli
+```
 
-```ts
-import { Module } from '@nestjs/common';
-import { ThrottlerModule } from '@nestjs/throttler';
+Also install locally for consistent team usage:
 
-@Module({
-  imports: [
-    ThrottlerModule.forRoot({
-      throttlers: [
-        {
-          ttl: 60000, // 1 minute
-          limit: 10, // Max 10 requests per minute
-        },
-      ],
-    }),
-  ],
-})
-export class AppModule {}
+```bash
+npm install -D @nestjs/cli
 ```
 
 ---
 
-## 🔐 Apply Throttling Globally
+## 🧪 CLI Scripts (Recommended)
 
-Use the `APP_GUARD` to apply throttling across your entire app:
-
-```ts
-import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard } from '@nestjs/throttler';
-
-providers: [
-  {
-    provide: APP_GUARD,
-    useClass: ThrottlerGuard,
-  },
-];
-```
-
----
-
-## 🎯 Use Per Route
-
-Override throttling for specific routes or controllers:
-
-```ts
-import { Throttle } from '@nestjs/throttler';
-
-@Throttle({ default: { limit: 5, ttl: 10000 } }) // 5 requests per 10 seconds
-@Get('custom')
-getCustom() {
-  return 'Custom throttled endpoint';
+```json
+"scripts": {
+  "build": "nest build",
+  "start": "nest start",
+  "start:dev": "nest start --watch",
+  "start:debug": "nest start --debug --watch"
 }
 ```
 
----
+Use via:
 
-## 🚫 Skip Throttling
-
-Skip throttling for specific routes or controllers:
-
-```ts
-import { SkipThrottle } from '@nestjs/throttler';
-
-@SkipThrottle()
-@Get('open')
-getOpenEndpoint() {
-  return 'No throttling on this route';
-}
+```bash
+npm run build
+npm run start
 ```
 
-Partial skipping:
+---
 
-```ts
-@SkipThrottle()
-@Controller('example')
-export class ExampleController {
-  // Will apply throttling
-  @SkipThrottle({ default: false })
-  @Get('secure')
-  secureRoute() {
-    return 'Throttled!';
+## 🧱 CLI Command Reference
+
+### 📦 `nest new`
+
+Creates a new standard-mode NestJS project.
+
+```bash
+nest new <project-name>
+```
+
+**Options**:
+
+- `--dry-run`, `-d`
+- `--skip-git`, `-g`
+- `--skip-install`, `-s`
+- `--package-manager`, `-p`
+- `--strict` (enables strict TypeScript mode)
+
+---
+
+### 🧬 `nest generate` / `nest g`
+
+Scaffold code components or projects.
+
+```bash
+nest g <schematic> <name> [options]
+```
+
+**Common Schematics**:
+
+| Name         | Alias | Description                     |
+| ------------ | ----- | ------------------------------- |
+| `app`        |       | Generate new app in monorepo    |
+| `library`    | `lib` | Generate new library (monorepo) |
+| `module`     | `mo`  | Generate module                 |
+| `service`    | `s`   | Generate service                |
+| `controller` | `co`  | Generate controller             |
+| `pipe`       | `pi`  | Generate pipe                   |
+| `guard`      | `gu`  | Generate guard                  |
+
+**Options**:
+
+- `--flat`
+- `--spec` / `--no-spec`
+- `--project` / `-p`
+
+---
+
+### 🔧 `nest build`
+
+Builds the project using `tsc`, `swc`, or `webpack`.
+
+```bash
+nest build <project-name> [options]
+```
+
+**Options**:
+
+- `--watch`, `-w`
+- `--builder tsc|swc|webpack`
+- `--path` (tsconfig path)
+- `--all` (build all projects)
+
+---
+
+### 🚀 `nest start`
+
+Compiles and starts an app.
+
+```bash
+nest start <project-name> [options]
+```
+
+**Options**:
+
+- `--watch`, `-w`
+- `--debug`, `-d`
+- `--builder`
+- `--env-file` (load `.env`)
+
+---
+
+### ➕ `nest add`
+
+Installs a Nest library and runs its schematic.
+
+```bash
+nest add <library-name>
+```
+
+---
+
+### 🔍 `nest info`
+
+Display versions of installed NestJS-related packages and environment info.
+
+```bash
+nest info
+```
+
+---
+
+## 🧱 Libraries in Monorepo
+
+### ✨ Creating a Library
+
+```bash
+nest g library my-library
+```
+
+- Prompted for prefix (e.g., `@app`) → used in path alias
+- Creates under `libs/my-library`
+
+**Generated structure**:
+
+```bash
+libs/
+└── my-library/
+    ├── src/
+    │   ├── index.ts
+    │   ├── my-library.module.ts
+    │   └── my-library.service.ts
+    └── tsconfig.lib.json
+```
+
+**`nest-cli.json`** will contain:
+
+```json
+"my-library": {
+  "type": "library",
+  "root": "libs/my-library",
+  "entryFile": "index",
+  "sourceRoot": "libs/my-library/src",
+  "compilerOptions": {
+    "tsConfigPath": "libs/my-library/tsconfig.lib.json"
   }
 }
 ```
 
----
+### 🧩 Using Library in App
 
-## 🌐 Support for Proxies
-
-To trust proxy headers for real client IP:
+Import module using alias:
 
 ```ts
-app.set('trust proxy', 'loopback');
+import { MyLibraryModule } from '@app/my-library';
 ```
 
-Custom proxy-aware tracker:
+**Path mappings in `tsconfig.json`**:
 
-```ts
-@Injectable()
-export class ThrottlerBehindProxyGuard extends ThrottlerGuard {
-  protected async getTracker(req: Record<string, any>): Promise<string> {
-    return req.ips?.[0] ?? req.ip;
-  }
+```json
+"paths": {
+  "@app/my-library": ["libs/my-library/src"],
+  "@app/my-library/*": ["libs/my-library/src/*"]
 }
 ```
 
----
+### 🏗️ Build the Library
 
-## 🔄 Async Configuration (e.g. with ConfigService)
-
-```ts
-ThrottlerModule.forRootAsync({
-  imports: [ConfigModule],
-  inject: [ConfigService],
-  useFactory: (config: ConfigService) => [
-    {
-      ttl: config.get('THROTTLE_TTL'),
-      limit: config.get('THROTTLE_LIMIT'),
-    },
-  ],
-});
+```bash
+nest build my-library
 ```
 
 ---
 
-## 📚 Helpers
+## 📌 DevOps & Compiler Details
 
-Use time helpers for readable configs:
+- **`nest build`** wraps `tsc`, `swc`, or `webpack`
 
-```ts
-import { seconds, minutes } from '@nestjs/throttler';
+  - Supports path mapping via `tsconfig-paths`
+  - Recommended for standard workflows
 
-ttl: minutes(1); // 60000
-```
+- **`nest start`** compiles and runs using local `node` binary
+
+- **Globally installed CLI** is used only for `nest new` and `nest generate`
+
+- Use **local `@nestjs/cli`** + `package.json` scripts for consistent builds
+
+---
+
+## ✅ Summary Table
+
+| Command      | Purpose                           | Usage                      |
+| ------------ | --------------------------------- | -------------------------- |
+| `nest new`   | Create new Nest project           | `nest new my-app`          |
+| `nest g`     | Generate components/libraries     | `nest g service user`      |
+| `nest build` | Compile app or lib                | `nest build my-app`        |
+| `nest start` | Run app                           | `nest start my-app`        |
+| `nest add`   | Install a library                 | `nest add @nestjs/swagger` |
+| `nest info`  | Show environment and version info | `nest info`                |
+
+---
+
+## 📎 Notes
+
+- Libraries **cannot run standalone**; must be imported into an app
+- Apps can be built with `webpack` by default in monorepo
+- `nest-cli.json` governs how each project is compiled
+
+> 🧠 Use monorepos + libraries to modularize large enterprise systems
